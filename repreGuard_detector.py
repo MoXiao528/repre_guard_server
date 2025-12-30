@@ -4,6 +4,7 @@ import random
 import numpy as np
 import logging
 import torch
+from dataclasses import dataclass
 from tqdm import tqdm
 from sklearn.metrics import (
     roc_curve, auc, confusion_matrix, precision_score, recall_score,
@@ -12,10 +13,12 @@ from sklearn.metrics import (
 from transformers import (
     AutoTokenizer, AutoModelForCausalLM, PreTrainedTokenizer, pipeline, set_seed
 )
-from metrics import get_roc_by_threshold,get_roc_metrics
 import argparse
 from repe import repe_pipeline_registry
 repe_pipeline_registry()
+
+DEFAULT_MODEL_NAME = "sshleifer/tiny-gpt2"
+DEFAULT_THRESHOLD = 2.4924452377944597
 
 class AIHumanFunctionModel:
     def __init__(self, model_name_or_path, ntrain, rep_token, batch_size, random_seed=2025, ai_weight=1, human_weight=1, n_difference=1, direction_method='pca'):
@@ -157,6 +160,74 @@ class AIHumanFunctionModel:
         # test_file_name = f"{os.path.basename(self.test_data_path.split('.json')[0])}_BY_{os.path.basename(self.train_data_path.split('.json')[0])}_ntrain_{self.ntrain}_reptoken_{self.rep_token}"
         # self.save_json(test_json_data, f'results/{test_file_name}.json')
         return test_json_data
+
+    def score_text(self, text: str) -> float:
+        if self.rep_reader is None:
+            raise ValueError("rep_reader is not initialized; call process_train_data first.")
+        H_test_token = self.rep_reading_pipeline([text],
+                                rep_reader=self.rep_reader,
+                                rep_token=0,
+                                hidden_layers=self.hidden_layers)
+        num_tokens = len(H_test_token[0][-1][0])
+        if num_tokens == 0:
+            return 0.0
+        token_start = 1 if num_tokens > 1 else 0
+        all_token_scores = []
+        for token_idx in range(token_start, num_tokens, 1):
+            token_scores = []
+
+            for layer in self.hidden_layers:
+                token_score_in_layer = H_test_token[0][layer][0][token_idx] * self.rep_reader.direction_signs[layer][0]
+                token_scores.append(token_score_in_layer)
+            
+            all_token_scores.append(token_scores)
+        if not all_token_scores:
+            return 0.0
+        return float(np.mean(all_token_scores))
+
+
+@dataclass
+class DetectResult:
+    text: str
+    score: float
+    threshold: float
+    label: str
+    model: str
+
+
+class RepreGuardDetector:
+    def __init__(
+        self,
+        train_data_path: str,
+        model_name_or_path: str = DEFAULT_MODEL_NAME,
+        threshold: float = DEFAULT_THRESHOLD,
+        ntrain: int = 128,
+        rep_token: float = -1,
+        batch_size: int = 16,
+        random_seed: int = 2025,
+    ) -> None:
+        self.threshold = threshold
+        self.model = AIHumanFunctionModel(
+            model_name_or_path=model_name_or_path,
+            ntrain=ntrain,
+            rep_token=rep_token,
+            batch_size=batch_size,
+            random_seed=random_seed,
+        )
+        train_data_path = train_data_path.strip()
+        train_data = json.load(open(train_data_path, "r"))[:ntrain]
+        self.model.process_train_data(train_data=train_data)
+
+    def detect_text(self, text: str) -> DetectResult:
+        score = self.model.score_text(text)
+        label = "AI" if score > self.threshold else "HUMAN"
+        return DetectResult(
+            text=text,
+            score=float(score),
+            threshold=self.threshold,
+            label=label,
+            model=self.model.model_name,
+        )
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()

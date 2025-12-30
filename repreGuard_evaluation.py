@@ -1,10 +1,10 @@
 import argparse
 import logging
-from repreGuard_detector import AIHumanFunctionModel
+from repreGuard_detector import AIHumanFunctionModel, DEFAULT_MODEL_NAME, DEFAULT_THRESHOLD
 import numpy as np
 import logging
 import json
-from metrics import get_roc_by_threshold,get_roc_metrics
+from metrics import get_roc_by_threshold
 import os
 import random
 from collections import defaultdict
@@ -42,11 +42,15 @@ def process_eval(args,train_json_data, test_json_data,test_data_path):
         elif item["train_input_label"] == 1:
             sample_preds.append(np.mean((item['rep_reader_scores_dict'])))
         
-    roc_auc, optimal_threshold, conf_matrix, precision, recall, f1, accuracy,tpr_at_fpr_0_01 = get_roc_metrics(real_preds,sample_preds)
+    roc_auc, _, conf_matrix, precision, recall, f1, accuracy,tpr_at_fpr_0_01 = get_roc_by_threshold(
+        real_preds,
+        sample_preds,
+        threshold=DEFAULT_THRESHOLD,
+    )
 
     train_result = {
             "roc_auc": roc_auc,
-            "optimal_threshold": optimal_threshold,
+            "optimal_threshold": DEFAULT_THRESHOLD,
             "conf_matrix": conf_matrix,
             "precision": precision,
             "recall": recall,
@@ -66,11 +70,14 @@ def process_eval(args,train_json_data, test_json_data,test_data_path):
         elif item["test_input_label"] == 1:
             sample_preds.append(np.mean((item['rep_reader_scores_dict'])))
         
-    roc_auc, optimal_threshold, conf_matrix, precision, recall, f1, accuracy,tpr_at_fpr_0_01 = get_roc_by_threshold(real_preds,
-                                                                                            sample_preds,threshold=optimal_threshold)
+    roc_auc, _, conf_matrix, precision, recall, f1, accuracy,tpr_at_fpr_0_01 = get_roc_by_threshold(
+        real_preds,
+        sample_preds,
+        threshold=DEFAULT_THRESHOLD,
+    )
     test_result = {
             "roc_auc": roc_auc,
-            "optimal_threshold": optimal_threshold,
+            "optimal_threshold": DEFAULT_THRESHOLD,
             "conf_matrix": conf_matrix,
             "precision": precision,
             "recall": recall,
@@ -149,7 +156,7 @@ def entrance(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--model_name_or_path', type=str, required=True)
+    parser.add_argument('--model_name_or_path', type=str, default=DEFAULT_MODEL_NAME)
     parser.add_argument('--train_data_path', type=str, required=True)
     parser.add_argument('--test_data_paths', type=str, required=True,help="Path to the test data. could be several files with ','. ")
     parser.add_argument('--ntrain', default=128, type=int,required=False)
