@@ -17,8 +17,9 @@ import argparse
 from repe import repe_pipeline_registry
 repe_pipeline_registry()
 
-DEFAULT_MODEL_NAME = "sshleifer/tiny-gpt2"
-DEFAULT_THRESHOLD = 2.4924452377944597
+# Change these two defaults together when swapping the model or threshold.
+DEFAULT_MODEL_NAME = "sshleifer/tiny-gpt2"  # one-click replace: default surrogate model
+DEFAULT_THRESHOLD = 2.4924452377944597  # one-click replace: detection threshold
 
 class AIHumanFunctionModel:
     def __init__(self, model_name_or_path, ntrain, rep_token, batch_size, random_seed=2025, ai_weight=1, human_weight=1, n_difference=1, direction_method='pca'):

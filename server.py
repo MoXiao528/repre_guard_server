@@ -37,6 +37,7 @@ def _get_detector() -> RepreGuardDetector:
         rep_token = float(os.getenv("REPRE_GUARD_REP_TOKEN", "-1"))
         batch_size = int(os.getenv("REPRE_GUARD_BATCH_SIZE", "16"))
         random_seed = int(os.getenv("REPRE_GUARD_RANDOM_SEED", "2025"))
+        # One-click replace: override these defaults via env vars when swapping model/threshold.
         model_name = os.getenv("REPRE_GUARD_MODEL_NAME", DEFAULT_MODEL_NAME)
         threshold = float(os.getenv("REPRE_GUARD_THRESHOLD", str(DEFAULT_THRESHOLD)))
         _detector = RepreGuardDetector(
