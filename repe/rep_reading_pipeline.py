@@ -123,7 +123,7 @@ class RepReadingPipeline(Pipeline):
                 for layer in hidden_layers:
                     if layer in batch:
                         hidden_states[layer].append(batch[layer].detach().cpu().numpy())
-    		del hidden_states_batch
+            del hidden_states_batch
             torch.cuda.empty_cache()
         hidden_states = {k: np.vstack(v) for k, v in hidden_states.items()}
         return hidden_states
