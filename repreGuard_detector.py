@@ -181,7 +181,10 @@ class AIHumanFunctionModel:
 
     def score_text(self, text: str) -> float:
         if self.rep_reader is None:
-            raise RuntimeError("rep_reader 未初始化，请先调用 fit_rep_reader。")
+            raise RuntimeError(
+                "rep_reader 未初始化，请先调用 fit_rep_reader，或通过 "
+                "REPRE_GUARD_READER_PATH 加载已保存的方向向量。"
+            )
 
         H_test_token = self.rep_reading_pipeline(
             [text],
