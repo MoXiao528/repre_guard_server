@@ -21,9 +21,10 @@ THRESHOLD = 2.4924452377944597
 
 # TODO: 训练数据用于拟合 RepreGuard 的方向向量，请替换成你自己的训练集路径。
 # 目前仅做推理，不再读取训练数据；保留读取逻辑以便未来需要时一键恢复。
-TRAIN_DATA_PATH = os.environ.get("REPRE_GUARD_TRAIN_DATA", "")
+DEFAULT_TRAIN_DATA_PATH = "direct_prompt_train.json"
+TRAIN_DATA_PATH = os.environ.get("REPRE_GUARD_TRAIN_DATA", DEFAULT_TRAIN_DATA_PATH)
 NTRAIN = int(os.environ.get("REPRE_GUARD_NTRAIN", "128"))
-FIT_ON_STARTUP = os.environ.get("REPRE_GUARD_FIT_ON_STARTUP", "0") == "1"
+FIT_ON_STARTUP = os.environ.get("REPRE_GUARD_FIT_ON_STARTUP", "1") == "1"
 
 # TODO: 推理模式下从已保存的 rep_reader 读取方向向量（避免再训练）。
 # 以后替换模型/方向向量时，只需更新这个路径即可。
@@ -42,8 +43,12 @@ def _ensure_cuda_available() -> str:
 def _load_train_data(path: str, ntrain: int) -> List[dict]:
     if not path:
         raise RuntimeError("未设置 REPRE_GUARD_TRAIN_DATA，无法初始化 RepreGuard 检测链路。")
+    LOGGER.info("准备加载训练集: %s", path)
     if not os.path.exists(path):
-        raise FileNotFoundError(f"训练集不存在: {path}")
+        raise FileNotFoundError(
+            f"训练集不存在: {path}，请确认已将 {DEFAULT_TRAIN_DATA_PATH} 放在项目根目录，"
+            "或设置 REPRE_GUARD_TRAIN_DATA 指向训练集。"
+        )
     with open(path, "r", encoding="utf-8") as json_file:
         data = json.load(json_file)
     if not isinstance(data, list):
