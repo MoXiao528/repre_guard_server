@@ -23,7 +23,7 @@ THRESHOLD = 2.4924452377944597
 # 目前仅做推理，不再读取训练数据；保留读取逻辑以便未来需要时一键恢复。
 DEFAULT_TRAIN_DATA_PATH = "direct_prompt_train.json"
 TRAIN_DATA_PATH = os.environ.get("REPRE_GUARD_TRAIN_DATA", DEFAULT_TRAIN_DATA_PATH)
-NTRAIN = int(os.environ.get("REPRE_GUARD_NTRAIN", "128"))
+NTRAIN = int(os.environ.get("REPRE_GUARD_NTRAIN", "0"))
 FIT_ON_STARTUP = os.environ.get("REPRE_GUARD_FIT_ON_STARTUP", "1") == "1"
 
 # TODO: 推理模式下从已保存的 rep_reader 读取方向向量（避免再训练）。
@@ -51,11 +51,14 @@ def _load_train_data(path: str, ntrain: int) -> List[dict]:
         )
     with open(path, "r", encoding="utf-8") as json_file:
         data = json.load(json_file)
+    LOGGER.info("训练集加载完成，总样本数=%s", len(data))
     if not isinstance(data, list):
         raise ValueError(f"训练集数据格式错误，期望 list，实际为 {type(data)}。")
     if not data:
         raise ValueError("训练集数据为空，无法拟合方向向量。")
-    return data[:ntrain]
+    if ntrain and ntrain > 0:
+        return data[:ntrain]
+    return data
 
 
 def _load_rep_reader(path: str):
