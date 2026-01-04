@@ -86,56 +86,67 @@ class AIHumanFunctionModel:
                 )
 
     def _normalize_label_dataset(self, dataset, dataset_name: str):
-        ai_texts = []
-        human_texts = []
+        grouped = {}
+        ai_total = 0
+        human_total = 0
         for idx, item in enumerate(dataset):
             label = str(item.get("label", "")).strip().lower()
             text = item.get("text", "")
             if not text:
                 continue
-            if label in {"human"}:
-                human_texts.append(text)
-            elif label in {"llm", "ai", "machine", "gpt", "chatgpt"}:
-                ai_texts.append(text)
-            elif label:
-                ai_texts.append(text)
-            else:
+            if label not in {"human", "llm"}:
                 raise ValueError(
-                    f"{dataset_name} 第 {idx} 条数据 label 为空，"
-                    "请使用 human 或 llm(ai) 标注。"
+                    f"{dataset_name} 第 {idx} 条数据 label={item.get('label')} 不被支持，"
+                    "请使用 human 或 llm。"
                 )
-        pair_count = min(len(ai_texts), len(human_texts))
-        if pair_count == 0:
-            if ai_texts or human_texts:
+            data_type = item.get("data_type", "unknown")
+            llm_type = item.get("llm_type", "unknown")
+            key = (data_type, llm_type)
+            if key not in grouped:
+                grouped[key] = {"human": [], "llm": []}
+            grouped[key][label].append(text)
+            if label == "human":
+                human_total += 1
+            else:
+                ai_total += 1
+
+        if ai_total == 0 or human_total == 0:
+            raise ValueError(
+                f"{dataset_name} 未找到可用的 AI/HUMAN 配对样本，无法继续训练/评估。"
+                f"当前统计：AI={ai_total} HUMAN={human_total}。"
+                "请确保训练集中同时包含 human 与 llm 样本。"
+            )
+
+        pairs = []
+        for (data_type, llm_type), buckets in grouped.items():
+            ai_texts = buckets["llm"]
+            human_texts = buckets["human"]
+            pair_count = min(len(ai_texts), len(human_texts))
+            if pair_count == 0:
+                continue
+            if len(ai_texts) != len(human_texts):
                 logging.warning(
-                    "%s 仅检测到单一类别样本，AI=%s HUMAN=%s，将使用同类样本构造伪配对以跑通流程。",
+                    "%s(%s/%s) AI/HUMAN 数量不一致，将按最小数量配对。AI=%s HUMAN=%s",
                     dataset_name,
+                    data_type,
+                    llm_type,
                     len(ai_texts),
                     len(human_texts),
                 )
-                source = ai_texts if ai_texts else human_texts
-                shuffled = source[:]
-                random.shuffle(shuffled)
-                ai_texts = source
-                human_texts = shuffled
-                pair_count = min(len(ai_texts), len(human_texts))
-            else:
-                raise ValueError(
-                    f"{dataset_name} 未找到可用的 AI/HUMAN 配对样本，无法继续训练/评估。"
-                    f"当前统计：AI={len(ai_texts)} HUMAN={len(human_texts)}。"
-                    "请确保训练集中同时包含 human 与 llm(ai) 样本。"
-                )
-        if len(ai_texts) != len(human_texts):
-            logging.warning(
-                "%s AI/HUMAN 数量不一致，将按最小数量配对。AI=%s HUMAN=%s",
-                dataset_name,
-                len(ai_texts),
-                len(human_texts),
+            pairs.extend(
+                {
+                    "direct_prompt": ai_texts[i],
+                    "human_text": human_texts[i],
+                }
+                for i in range(pair_count)
             )
-        return [
-            {"direct_prompt": ai_texts[i], "human_text": human_texts[i]}
-            for i in range(pair_count)
-        ]
+
+        if not pairs:
+            raise ValueError(
+                f"{dataset_name} 未能在任意 data_type/llm_type 分组中找到可配对样本，"
+                "请检查数据分布。"
+            )
+        return pairs
 
     def _normalize_dataset(self, dataset, dataset_name: str):
         sample = dataset[0]
