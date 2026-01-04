@@ -93,19 +93,23 @@ class AIHumanFunctionModel:
             text = item.get("text", "")
             if not text:
                 continue
-            if label in {"llm", "ai", "machine"}:
-                ai_texts.append(text)
-            elif label in {"human"}:
+            if label in {"human"}:
                 human_texts.append(text)
+            elif label in {"llm", "ai", "machine", "gpt", "chatgpt"}:
+                ai_texts.append(text)
+            elif label:
+                ai_texts.append(text)
             else:
                 raise ValueError(
-                    f"{dataset_name} 第 {idx} 条数据 label={item.get('label')} 不被支持，"
-                    "请使用 human/llm(ai)。"
+                    f"{dataset_name} 第 {idx} 条数据 label 为空，"
+                    "请使用 human 或 llm(ai) 标注。"
                 )
         pair_count = min(len(ai_texts), len(human_texts))
         if pair_count == 0:
             raise ValueError(
                 f"{dataset_name} 未找到可用的 AI/HUMAN 配对样本，无法继续训练/评估。"
+                f"当前统计：AI={len(ai_texts)} HUMAN={len(human_texts)}。"
+                "请确保训练集中同时包含 human 与 llm(ai) 样本。"
             )
         if len(ai_texts) != len(human_texts):
             logging.warning(
