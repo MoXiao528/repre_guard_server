@@ -18,13 +18,29 @@ from repe import repe_pipeline_registry
 repe_pipeline_registry()
 
 class AIHumanFunctionModel:
-    def __init__(self, model_name_or_path, ntrain, rep_token, batch_size, random_seed=2025, ai_weight=1, human_weight=1, n_difference=1, direction_method='pca'):
+    def __init__(
+        self,
+        model_name_or_path,
+        ntrain,
+        rep_token,
+        batch_size,
+        random_seed=2025,
+        ai_weight=1,
+        human_weight=1,
+        n_difference=1,
+        direction_method='pca',
+        device=None,
+    ):
         set_seed(random_seed)
         random.seed(random_seed)
         np.random.seed(random_seed)
 
+        if device is None:
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.device = torch.device(device)
         self.model_name = os.path.basename(model_name_or_path)
-        self.model = AutoModelForCausalLM.from_pretrained(model_name_or_path, device_map="auto")
+        self.model = AutoModelForCausalLM.from_pretrained(model_name_or_path)
+        self.model.to(self.device)
         use_fast_tokenizer = "LlamaForCausalLM" not in self.model.config.architectures
         self.tokenizer = AutoTokenizer.from_pretrained(model_name_or_path, use_fast_tokenizer=use_fast_tokenizer, padding_side="left", legacy=False)
         self.tokenizer.pad_token_id = 0
@@ -147,6 +163,49 @@ class AIHumanFunctionModel:
         # self.save_json(train_json_data, f'results/{train_file_name}.json')
 
         return train_json_data
+
+    def fit_rep_reader(self, train_data):
+        dataset = self.ai_human_function_dataset(train_data, self.tokenizer)
+
+        self.rep_reader = self.rep_reading_pipeline.get_directions(
+            dataset['train']['data'],
+            rep_token=self.rep_token,
+            hidden_layers=self.hidden_layers,
+            n_difference=self.n_difference,
+            train_labels=dataset['train']['labels'],
+            direction_method=self.direction_method,
+            batch_size=self.batch_size,
+            ai_weight=self.ai_weight,
+            human_weight=self.human_weight,
+        )
+
+    def score_text(self, text: str) -> float:
+        if self.rep_reader is None:
+            raise RuntimeError(
+                "rep_reader 未初始化，请先调用 fit_rep_reader，或通过 "
+                "REPRE_GUARD_READER_PATH 加载已保存的方向向量。"
+            )
+
+        H_test_token = self.rep_reading_pipeline(
+            [text],
+            rep_reader=self.rep_reader,
+            rep_token=0,
+            hidden_layers=self.hidden_layers,
+        )
+        all_token_scores = []
+        num_tokens = len(H_test_token[0][-1][0])
+
+        for token_idx in range(1, num_tokens, 1):
+            token_scores = []
+            for layer in self.hidden_layers:
+                token_score_in_layer = (
+                    H_test_token[0][layer][0][token_idx]
+                    * self.rep_reader.direction_signs[layer][0]
+                )
+                token_scores.append(token_score_in_layer)
+            all_token_scores.append(token_scores)
+
+        return float(np.mean(all_token_scores))
 
     def process_test_data(self,test_data):
         # logging.info(f"Test in {test_data_path}")
