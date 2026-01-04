@@ -57,7 +57,30 @@ class AIHumanFunctionModel:
         
         logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
+    def _validate_dataset_schema(self, dataset, dataset_name: str) -> None:
+        if not isinstance(dataset, list):
+            raise ValueError(f"{dataset_name} 数据格式错误，期望 list，实际为 {type(dataset)}。")
+        if not dataset:
+            raise ValueError(f"{dataset_name} 数据为空，无法继续训练/评估。")
+        required_keys = {"direct_prompt", "human_text"}
+        for idx, item in enumerate(dataset):
+            if not isinstance(item, dict):
+                raise ValueError(
+                    f"{dataset_name} 第 {idx} 条数据格式错误，期望 dict，实际为 {type(item)}。"
+                )
+            missing = required_keys - item.keys()
+            if missing:
+                raise KeyError(
+                    f"{dataset_name} 第 {idx} 条数据缺少字段 {sorted(missing)}，"
+                    "请确保包含 direct_prompt 和 human_text。"
+                )
+            if not item["direct_prompt"] or not item["human_text"]:
+                raise ValueError(
+                    f"{dataset_name} 第 {idx} 条数据文本为空，请检查 direct_prompt/human_text。"
+                )
+
     def ai_human_function_dataset(self, train_dataset: str, tokenizer: PreTrainedTokenizer):
+        self._validate_dataset_schema(train_dataset, "训练集")
         pos_statements = []
         neg_statements = []
         # ai_datasets = [item for item in train_dataset if item.get("label") == "llm"]
@@ -90,6 +113,12 @@ class AIHumanFunctionModel:
         }
 
     def process_data(self, data, mode="train"):
+        self._validate_dataset_schema(data, "训练集" if mode == "train" else "测试集")
+        if self.rep_reader is None:
+            raise RuntimeError(
+                "rep_reader 尚未初始化，请先调用 process_train_data/fit_rep_reader，"
+                "或确保已成功加载方向向量。"
+            )
         input_statements = []
         input_labels = []
         # ai_datasets = [item for item in data if item.get("label") == "llm"]

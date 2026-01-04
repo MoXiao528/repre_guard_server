@@ -29,6 +29,25 @@ def bootstrap_sample_by_domain(data, ntrain,random_seed=2025,domain_key="domain"
 
     return sampled_data
 
+def _load_json_data(path: str, dataset_name: str):
+    try:
+        with open(path, "r", encoding="utf-8") as json_file:
+            data = json.load(json_file)
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(
+            f"未找到 {dataset_name} 文件: {path}，请确认路径或文件名是否正确。"
+        ) from exc
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f"{dataset_name} JSON 解析失败: {path}，请检查是否为合法 JSON。"
+        ) from exc
+    if not isinstance(data, list):
+        raise ValueError(f"{dataset_name} 数据格式错误，期望 list，实际为 {type(data)}。")
+    if not data:
+        raise ValueError(f"{dataset_name} 数据为空，无法继续计算。")
+    return data
+
+
 def process_eval(args,train_json_data, test_json_data,test_data_path):
     print(f"Eval in {args.train_data_path}")
     # with open(train_filepath, 'r') as json_file:
@@ -91,7 +110,7 @@ def entrance(args):
     if args.bootstrap_iter == -1:
         logging.info(f"Train in {args.train_data_path}")
         train_data_path = args.train_data_path.strip()
-        train_data = json.load(open(train_data_path, "r"))[:args.ntrain]
+        train_data = _load_json_data(train_data_path, "训练集")[:args.ntrain]
 
         train_json_data = model.process_train_data(train_data=train_data)
 
@@ -100,7 +119,7 @@ def entrance(args):
         for test_data_path in test_data_paths:
             test_data_path = test_data_path.strip()
             logging.info(f"Test in {test_data_path}")
-            test_data = json.load(open(test_data_path, "r"))
+            test_data = _load_json_data(test_data_path, "测试集")
 
             test_json_data = model.process_test_data(test_data=test_data)
             
@@ -118,7 +137,7 @@ def entrance(args):
     elif args.bootstrap_iter > 0:
         logging.info(f"Train in {args.train_data_path} using bootstrap")
         train_data_path = args.train_data_path.strip()
-        ori_train_data = json.load(open(train_data_path, "r"))
+        ori_train_data = _load_json_data(train_data_path, "训练集")
         random.seed(args.random_seed)
         random_seeds = [random.randint(1, 100) for _ in range(args.bootstrap_iter)]
         print(f"Random seeds: {random_seeds}")
@@ -132,7 +151,7 @@ def entrance(args):
             for test_data_path in test_data_paths:
                 test_data_path = test_data_path.strip()
                 logging.info(f"Test in {test_data_path}")
-                test_data = json.load(open(test_data_path, "r"))
+                test_data = _load_json_data(test_data_path, "测试集")
                 test_json_data = model.process_test_data(test_data=test_data)
                 train_result,test_result = process_eval(args,train_json_data, test_json_data,test_data_path)
                 result = {"train_result": train_result, "test_result": test_result}
@@ -150,8 +169,20 @@ def entrance(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--model_name_or_path', type=str, required=True)
-    parser.add_argument('--train_data_path', type=str, required=True)
-    parser.add_argument('--test_data_paths', type=str, required=True,help="Path to the test data. could be several files with ','. ")
+    parser.add_argument(
+        '--train_data_path',
+        type=str,
+        required=False,
+        default="direct_prompt_train.json",
+        help="训练集路径，默认读取当前目录下的 direct_prompt_train.json",
+    )
+    parser.add_argument(
+        '--test_data_paths',
+        type=str,
+        required=False,
+        default="direct_prompt_test.json",
+        help="测试集路径，支持多个文件用英文逗号分隔。默认 direct_prompt_test.json",
+    )
     parser.add_argument('--ntrain', default=128, type=int,required=False)
     parser.add_argument('--bootstrap_iter', default=-1, type=int,required=False)
     parser.add_argument('--rep_token', default=-1, type=float,required=False)
