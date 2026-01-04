@@ -62,25 +62,77 @@ class AIHumanFunctionModel:
             raise ValueError(f"{dataset_name} 数据格式错误，期望 list，实际为 {type(dataset)}。")
         if not dataset:
             raise ValueError(f"{dataset_name} 数据为空，无法继续训练/评估。")
-        required_keys = {"direct_prompt", "human_text"}
+        required_pair_keys = {"direct_prompt", "human_text"}
+        required_label_keys = {"text", "label"}
         for idx, item in enumerate(tqdm(dataset, desc=f"{dataset_name}校验", leave=False)):
             if not isinstance(item, dict):
                 raise ValueError(
                     f"{dataset_name} 第 {idx} 条数据格式错误，期望 dict，实际为 {type(item)}。"
                 )
-            missing = required_keys - item.keys()
-            if missing:
+            has_pair = required_pair_keys.issubset(item.keys())
+            has_label = required_label_keys.issubset(item.keys())
+            if not has_pair and not has_label:
                 raise KeyError(
-                    f"{dataset_name} 第 {idx} 条数据缺少字段 {sorted(missing)}，"
-                    "请确保包含 direct_prompt 和 human_text。"
+                    f"{dataset_name} 第 {idx} 条数据字段不匹配，"
+                    "请确保包含 direct_prompt/human_text 或 text/label。"
                 )
-            if not item["direct_prompt"] or not item["human_text"]:
+            if has_pair and (not item["direct_prompt"] or not item["human_text"]):
                 raise ValueError(
                     f"{dataset_name} 第 {idx} 条数据文本为空，请检查 direct_prompt/human_text。"
                 )
+            if has_label and not item["text"]:
+                raise ValueError(
+                    f"{dataset_name} 第 {idx} 条数据文本为空，请检查 text。"
+                )
+
+    def _normalize_label_dataset(self, dataset, dataset_name: str):
+        ai_texts = []
+        human_texts = []
+        for idx, item in enumerate(dataset):
+            label = str(item.get("label", "")).strip().lower()
+            text = item.get("text", "")
+            if not text:
+                continue
+            if label in {"llm", "ai", "machine"}:
+                ai_texts.append(text)
+            elif label in {"human"}:
+                human_texts.append(text)
+            else:
+                raise ValueError(
+                    f"{dataset_name} 第 {idx} 条数据 label={item.get('label')} 不被支持，"
+                    "请使用 human/llm(ai)。"
+                )
+        pair_count = min(len(ai_texts), len(human_texts))
+        if pair_count == 0:
+            raise ValueError(
+                f"{dataset_name} 未找到可用的 AI/HUMAN 配对样本，无法继续训练/评估。"
+            )
+        if len(ai_texts) != len(human_texts):
+            logging.warning(
+                "%s AI/HUMAN 数量不一致，将按最小数量配对。AI=%s HUMAN=%s",
+                dataset_name,
+                len(ai_texts),
+                len(human_texts),
+            )
+        return [
+            {"direct_prompt": ai_texts[i], "human_text": human_texts[i]}
+            for i in range(pair_count)
+        ]
+
+    def _normalize_dataset(self, dataset, dataset_name: str):
+        sample = dataset[0]
+        if "direct_prompt" in sample and "human_text" in sample:
+            return dataset
+        if "text" in sample and "label" in sample:
+            return self._normalize_label_dataset(dataset, dataset_name)
+        raise ValueError(
+            f"{dataset_name} 无法识别的数据结构，请检查字段是否包含 "
+            "direct_prompt/human_text 或 text/label。"
+        )
 
     def ai_human_function_dataset(self, train_dataset: str, tokenizer: PreTrainedTokenizer):
         self._validate_dataset_schema(train_dataset, "训练集")
+        train_dataset = self._normalize_dataset(train_dataset, "训练集")
         pos_statements = []
         neg_statements = []
         # ai_datasets = [item for item in train_dataset if item.get("label") == "llm"]
@@ -113,12 +165,14 @@ class AIHumanFunctionModel:
         }
 
     def process_data(self, data, mode="train"):
-        self._validate_dataset_schema(data, "训练集" if mode == "train" else "测试集")
+        dataset_name = "训练集" if mode == "train" else "测试集"
+        self._validate_dataset_schema(data, dataset_name)
         if self.rep_reader is None:
             raise RuntimeError(
                 "rep_reader 尚未初始化，请先调用 process_train_data/fit_rep_reader，"
                 "或确保已成功加载方向向量。"
             )
+        data = self._normalize_dataset(data, dataset_name)
         input_statements = []
         input_labels = []
         # ai_datasets = [item for item in data if item.get("label") == "llm"]
