@@ -74,6 +74,11 @@ def process_eval(args,train_json_data, test_json_data,test_data_path):
             "tpr_at_fpr_0_01": tpr_at_fpr_0_01
         }
     print(f"Train result: {train_result}")
+    print(
+        f"Train samples: {len(train_json_data)} "
+        f"(AI={sum(1 for item in train_json_data if item['train_input_label'] == 1)}, "
+        f"HUMAN={sum(1 for item in train_json_data if item['train_input_label'] == 0)})"
+    )
 
     print(f"Eval in {test_data_path}")
     real_preds = []
@@ -98,6 +103,11 @@ def process_eval(args,train_json_data, test_json_data,test_data_path):
             "tpr_at_fpr_0_01": tpr_at_fpr_0_01
         }
     print(f"Test result: {test_result}")
+    print(
+        f"Test samples: {len(test_json_data)} "
+        f"(AI={sum(1 for item in test_json_data if item['test_input_label'] == 1)}, "
+        f"HUMAN={sum(1 for item in test_json_data if item['test_input_label'] == 0)})"
+    )
 
     return train_result,test_result
 

@@ -63,7 +63,7 @@ class AIHumanFunctionModel:
         if not dataset:
             raise ValueError(f"{dataset_name} 数据为空，无法继续训练/评估。")
         required_keys = {"direct_prompt", "human_text"}
-        for idx, item in enumerate(dataset):
+        for idx, item in enumerate(tqdm(dataset, desc=f"{dataset_name}校验", leave=False)):
             if not isinstance(item, dict):
                 raise ValueError(
                     f"{dataset_name} 第 {idx} 条数据格式错误，期望 dict，实际为 {type(item)}。"
