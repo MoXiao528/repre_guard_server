@@ -1,11 +1,7 @@
-import os
 from typing import Literal
 
 from fastapi import FastAPI
 from pydantic import BaseModel
-
-os.environ.setdefault("HF_HOME", "D:/huggingface")
-os.environ.setdefault("TRANSFORMERS_CACHE", "D:/huggingface/cache")
 
 # 使用原有 RepreGuard 检测链路
 from repreGuard_service import detect_text, DetectResult, get_detector

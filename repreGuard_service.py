@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import json
 import logging
-import os
 from dataclasses import dataclass
-from typing import List
+from pathlib import Path
 
 import torch
 
@@ -12,21 +10,13 @@ from repreGuard_detector import AIHumanFunctionModel
 
 LOGGER = logging.getLogger(__name__)
 
-# TODO: 以后替换检测模型时，只需要修改这里的 MODEL_NAME 即可。
-# 例如改成 "meta-llama/Llama-3.1-8B" 或其他你想要的模型名称/路径。
+# TODO: Update MODEL_NAME to your production model (e.g., "meta-llama/Llama-3.1-8B").
 MODEL_NAME = "sshleifer/tiny-gpt2"
 
-# TODO: 以后替换检测模型时，一并更新阈值。
+# TODO: Update THRESHOLD to the production model's calibrated threshold.
 THRESHOLD = 2.4924452377944597
 
-# TODO: 训练数据用于拟合 RepreGuard 的方向向量，请替换成你自己的训练集路径。
-# 目前仅做推理，不再读取训练数据；保留读取逻辑以便未来需要时一键恢复。
-TRAIN_DATA_PATH = os.environ.get("REPRE_GUARD_TRAIN_DATA", "")
-NTRAIN = int(os.environ.get("REPRE_GUARD_NTRAIN", "128"))
-
-# TODO: 推理模式下从已保存的 rep_reader 读取方向向量（避免再训练）。
-# 以后替换模型/方向向量时，只需更新这个路径即可。
-READER_PATH = os.environ.get("REPRE_GUARD_READER_PATH", "")
+READER_PATH = Path("saved_rep_reader.pt")
 
 _detector: AIHumanFunctionModel | None = None
 
@@ -38,16 +28,8 @@ def _ensure_cuda_available() -> str:
     return "cpu"
 
 
-def _load_train_data(path: str, ntrain: int) -> List[dict]:
-    if not path:
-        raise RuntimeError("未设置 REPRE_GUARD_TRAIN_DATA，无法初始化 RepreGuard 检测链路。")
-    with open(path, "r", encoding="utf-8") as json_file:
-        data = json.load(json_file)
-    return data[:ntrain]
-
-
-def _load_rep_reader(path: str):
-    if not path:
+def _load_rep_reader(path: Path):
+    if not path.exists():
         return None
     return torch.load(path, map_location="cpu")
 
@@ -56,7 +38,7 @@ def _init_detector() -> AIHumanFunctionModel:
     device = _ensure_cuda_available()
     model = AIHumanFunctionModel(
         model_name_or_path=MODEL_NAME,
-        ntrain=NTRAIN,
+        ntrain=128,
         rep_token=-1,
         batch_size=16,
         random_seed=2025,
@@ -64,13 +46,10 @@ def _init_detector() -> AIHumanFunctionModel:
     )
     model.rep_reader = _load_rep_reader(READER_PATH)
     if model.rep_reader is None:
-        LOGGER.warning(
-            "未设置 REPRE_GUARD_READER_PATH，当前不会读取训练数据并拟合方向向量。"
+        raise RuntimeError(
+            f"未找到 rep_reader 文件: {READER_PATH}. "
+            "请先运行 init_tiny_model.py 生成 saved_rep_reader.pt。"
         )
-        # 仅做推理时建议使用已保存的 rep_reader。
-        # 如需恢复训练，请取消下面的注释并提供训练数据路径：
-        # train_data = _load_train_data(TRAIN_DATA_PATH, NTRAIN)
-        # model.fit_rep_reader(train_data)
     return model
 
 
