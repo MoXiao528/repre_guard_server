@@ -31,7 +31,7 @@ def _ensure_cuda_available() -> str:
 def _load_rep_reader(path: Path):
     if not path.exists():
         return None
-    return torch.load(path, map_location="cpu")
+    return torch.load(path, map_location="cpu", weights_only=False)
 
 
 def _init_detector() -> AIHumanFunctionModel:
