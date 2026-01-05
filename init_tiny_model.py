@@ -10,10 +10,9 @@ from repreGuard_detector import AIHumanFunctionModel
 
 LOGGER = logging.getLogger(__name__)
 
-# TODO: Update MODEL_NAME to the production model path when training the final detector.
+# 将下方的 "sshleifer/tiny-gpt2" 替换为MODEL_NAME = "Qwen/Qwen2.5-7B"
 MODEL_NAME = "sshleifer/tiny-gpt2"
 
-# TODO: Point TRAIN_DATA_PATH to the full, real training dataset when ready for production.
 TRAIN_DATA_PATH = Path("train_MIXED_ALL.json")
 
 READER_OUTPUT_PATH = Path("saved_rep_reader.pt")
@@ -38,12 +37,6 @@ def _load_train_data() -> list[dict]:
 
 
 def truncate_data(data: list[dict], model_name: str, max_length: int = 400) -> list[dict]:
-    """
-    使用 tokenizer 对数据中的文本字段进行截断。
-    注意：GPT-2 上下文限制为 1024。
-    如果 pipeline 将 'prompt' 和 'text' 拼接，那么单个字段必须远小于 1024。
-    这里我们将单个字段限制在 400 左右，确保 400+400 < 1024。
-    """
     LOGGER.info(f"Initializing tokenizer for truncation (max_length={max_length})...")
     try:
         tokenizer = AutoTokenizer.from_pretrained(model_name)
@@ -76,9 +69,10 @@ def main() -> None:
     # 1. 加载数据
     train_data = _load_train_data()
 
-    # 2. 激进截断 (Aggressive Truncation)
-    # 设置为 450，假设最坏情况是两个字段拼接：450 + 450 = 900 < 1024
-    # 这样留出了 124 个 token 给特殊符号或其他开销，非常安全。
+    # 2. 数据截断
+    # 4090 显存较大，且 Qwen 支持长文本。
+    # 建议改为 2048，这样能保留更多语义信息，提升 RepReader 的准确性。
+    # 注意：如果你发现显存溢出 (OOM)，可以将这里回调至 1024。
     train_data = truncate_data(train_data, MODEL_NAME, max_length=450)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -88,7 +82,15 @@ def main() -> None:
         model_name_or_path=MODEL_NAME,
         ntrain=len(train_data),
         rep_token=-1,
+
+        # 当前 batch_size=16 仅适用于 tiny 模型。
+        # 换成 7B 模型后，必须将其改为 1 或 2！
+        # 如果不改，必定报错 CUDA Out of Memory。
+        # 7B 模型在 4090 (24GB) 上运行，必须设为 1 或 2。
+        # 设为 16 必死无疑 (OOM)。
+        # 建议先用 1 跑通，如果显存还有剩（可以用 nvidia-smi 观察），再尝试改为 2。
         batch_size=16,
+
         random_seed=2025,
         device=device,
     )
