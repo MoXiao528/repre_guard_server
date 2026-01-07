@@ -12,6 +12,7 @@ LOGGER = logging.getLogger(__name__)
 
 # 将下方的 "sshleifer/tiny-gpt2" 替换为MODEL_NAME = "Qwen/Qwen2.5-7B"
 MODEL_NAME = "sshleifer/tiny-gpt2"
+#MODEL_NAME = "Qwen/Qwen2.5-7B"
 
 TRAIN_DATA_PATH = Path("train_MIXED_ALL.json")
 
@@ -72,8 +73,9 @@ def main() -> None:
     # 2. 数据截断
     # 4090 显存较大，且 Qwen 支持长文本。
     # 建议改为 2048，这样能保留更多语义信息，提升 RepReader 的准确性。
-    # 注意：如果你发现显存溢出 (OOM)，可以将这里回调至 1024。
+    # 注意：如果发现显存溢出 (OOM)，可以将这里回调至 1024。
     train_data = truncate_data(train_data, MODEL_NAME, max_length=450)
+    #train_data = truncate_data(train_data, MODEL_NAME, max_length=2048)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     LOGGER.info(f"Using device: {device}")
@@ -84,13 +86,10 @@ def main() -> None:
         rep_token=-1,
 
         # 当前 batch_size=16 仅适用于 tiny 模型。
-        # 换成 7B 模型后，必须将其改为 1 或 2！
-        # 如果不改，必定报错 CUDA Out of Memory。
-        # 7B 模型在 4090 (24GB) 上运行，必须设为 1 或 2。
-        # 设为 16 必死无疑 (OOM)。
+        # 7B 模型在 4090 上运行，必须设为 1 或 2。
         # 建议先用 1 跑通，如果显存还有剩（可以用 nvidia-smi 观察），再尝试改为 2。
         batch_size=16,
-
+        #batch_size=1,
         random_seed=2025,
         device=device,
     )

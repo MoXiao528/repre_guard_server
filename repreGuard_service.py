@@ -10,10 +10,9 @@ from repreGuard_detector import AIHumanFunctionModel
 
 LOGGER = logging.getLogger(__name__)
 
-# TODO: Update MODEL_NAME to your production model (e.g., "meta-llama/Llama-3.1-8B").
 MODEL_NAME = "sshleifer/tiny-gpt2"
+#MODEL_NAME = "Qwen/Qwen2.5-7B"
 
-# TODO: Update THRESHOLD to the production model's calibrated threshold.
 THRESHOLD = 2.4924452377944597
 
 READER_PATH = Path("saved_rep_reader.pt")

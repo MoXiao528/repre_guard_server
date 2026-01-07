@@ -18,7 +18,7 @@ class DetectResponse(BaseModel):
     model_name: str
 
 
-app = FastAPI(title="RepreGuard Detect Service (tiny model)")
+app = FastAPI(title="RepreGuard Detect Service")
 
 
 @app.on_event("startup")
@@ -39,7 +39,7 @@ def detect(req: DetectRequest) -> DetectResponse:
     """
     调用 RepreGuard 检测链路，对文本进行检测。
     """
-    # 这里 FastAPI 会自动把 JSON 解析成 DetectRequest
+    #FastAPI 会自动把 JSON 解析成 DetectRequest
     result: DetectResult = detect_text(req.text)
 
     return DetectResponse(
