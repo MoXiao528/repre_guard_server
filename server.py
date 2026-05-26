@@ -1,14 +1,15 @@
+import asyncio
 from typing import Literal
 
-from fastapi import FastAPI
-from pydantic import BaseModel
+from fastapi import FastAPI, HTTPException, status
+from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 
-# 使用原有 RepreGuard 检测链路
-from repreGuard_service import detect_text, DetectResult, get_detector
+from repreGuard_service import DetectResult, DetectServiceError, detect_text, get_detector
 
 
 class DetectRequest(BaseModel):
-    text: str
+    text: str = Field(min_length=1, max_length=20000)
 
 
 class DetectResponse(BaseModel):
@@ -16,16 +17,16 @@ class DetectResponse(BaseModel):
     threshold: float
     label: Literal["AI", "HUMAN"]
     model_name: str
+    score_type: Literal["probability"] = "probability"
 
 
 app = FastAPI(title="RepreGuard Detect Service")
+GPU_SEMAPHORE = asyncio.Semaphore(1)
 
 
 @app.on_event("startup")
 def load_detector() -> None:
-    """
-    启动时初始化 RepreGuard 检测链路。
-    """
+    """Initialize the detector pipeline once at process startup."""
     get_detector()
 
 
@@ -35,16 +36,32 @@ def health_check() -> dict:
 
 
 @app.post("/detect", response_model=DetectResponse)
-def detect(req: DetectRequest) -> DetectResponse:
-    """
-    调用 RepreGuard 检测链路，对文本进行检测。
-    """
-    #FastAPI 会自动把 JSON 解析成 DetectRequest
-    result: DetectResult = detect_text(req.text)
+async def detect(req: DetectRequest) -> DetectResponse:
+    text = str(req.text or "").strip()
+    if not text:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": "TEXT_EMPTY", "message": "Text cannot be empty."},
+        )
+
+    try:
+        async with GPU_SEMAPHORE:
+            result: DetectResult = await run_in_threadpool(detect_text, text)
+    except DetectServiceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.to_dict()) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "code": "DETECT_INTERNAL_ERROR",
+                "message": "Detect service failed unexpectedly.",
+            },
+        ) from exc
 
     return DetectResponse(
         score=result.score,
         threshold=result.threshold,
         label=result.label,
         model_name=result.model,
+        score_type=result.score_type,
     )

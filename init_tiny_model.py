@@ -1,5 +1,6 @@
-import json
+﻿import json
 import logging
+import os
 import random
 from pathlib import Path
 
@@ -10,22 +11,17 @@ from repreGuard_detector import AIHumanFunctionModel
 
 LOGGER = logging.getLogger(__name__)
 
-# 将下方的 "sshleifer/tiny-gpt2" 替换为MODEL_NAME = "Qwen/Qwen2.5-7B"
-MODEL_NAME = "sshleifer/tiny-gpt2"
-#MODEL_NAME = "Qwen/Qwen2.5-7B"
-
-TRAIN_DATA_PATH = Path("train_MIXED_ALL.json")
-
+MODEL_NAME = "microsoft/phi-2"
+TRAIN_DATA_ENV_VAR = "REPRE_GUARD_TRAIN_DATA_PATH"
+TRAIN_DATA_CANDIDATES = (
+    Path("../data_local/repre_train_data.json"),
+    Path("../data_local/processed_datasets/repre_train_data.json"),
+    Path("train_MIXED_ALL.json"),
+)
 READER_OUTPUT_PATH = Path("saved_rep_reader.pt")
 
 
-def _load_train_data() -> list[dict]:
-    if TRAIN_DATA_PATH.exists():
-        LOGGER.info("Loading training data from %s", TRAIN_DATA_PATH)
-        with TRAIN_DATA_PATH.open("r", encoding="utf-8") as file:
-            return json.load(file)
-
-    LOGGER.warning("Training data not found. Using synthetic dummy samples.")
+def _build_dummy_samples() -> list[dict]:
     dummy_data = []
     for idx in range(10):
         dummy_data.append(
@@ -37,6 +33,90 @@ def _load_train_data() -> list[dict]:
     return dummy_data
 
 
+def _resolve_train_data_path() -> Path | None:
+    override = str(os.getenv(TRAIN_DATA_ENV_VAR, "")).strip()
+    candidates: list[Path] = []
+
+    if override:
+        candidates.append(Path(override).expanduser())
+
+    candidates.extend(TRAIN_DATA_CANDIDATES)
+
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+
+    return None
+
+
+def _normalize_train_item(item: dict) -> tuple[dict | None, str | None]:
+    if not isinstance(item, dict):
+        return None, None
+
+    split = str(item.get("split", "")).strip().lower()
+    if split and split != "train":
+        return None, None
+
+    direct_prompt = item.get("direct_prompt")
+    human_text = item.get("human_text")
+    if isinstance(direct_prompt, str) and direct_prompt.strip() and isinstance(human_text, str) and human_text.strip():
+        return {
+            "direct_prompt": direct_prompt.strip(),
+            "human_text": human_text.strip(),
+        }, "legacy"
+
+    rewritten_text = item.get("rewritten_text")
+    original_text = item.get("original_text")
+    if isinstance(rewritten_text, str) and rewritten_text.strip() and isinstance(original_text, str) and original_text.strip():
+        return {
+            "direct_prompt": rewritten_text.strip(),
+            "human_text": original_text.strip(),
+        }, "rewrite"
+
+    return None, None
+
+
+def _load_train_data() -> list[dict]:
+    train_data_path = _resolve_train_data_path()
+    if train_data_path is None:
+        LOGGER.warning("Training data not found. Using synthetic dummy samples.")
+        return _build_dummy_samples()
+
+    LOGGER.info("Loading training data from %s", train_data_path)
+    with train_data_path.open("r", encoding="utf-8") as file:
+        raw_data = json.load(file)
+
+    if not isinstance(raw_data, list):
+        raise RuntimeError(f"Training data must be a list, got: {type(raw_data)!r}")
+
+    normalized_data: list[dict] = []
+    dropped_count = 0
+    source_formats: set[str] = set()
+
+    for item in raw_data:
+        normalized_item, source_format = _normalize_train_item(item)
+        if normalized_item is None:
+            dropped_count += 1
+            continue
+        normalized_data.append(normalized_item)
+        if source_format:
+            source_formats.add(source_format)
+
+    if not normalized_data:
+        raise RuntimeError(
+            f"No compatible train records found in {train_data_path}. Expected direct_prompt/human_text or rewritten_text/original_text."
+        )
+
+    LOGGER.info(
+        "Prepared %d train pairs from %s (source_formats=%s, dropped=%d)",
+        len(normalized_data),
+        train_data_path,
+        ",".join(sorted(source_formats)) or "unknown",
+        dropped_count,
+    )
+    return normalized_data
+
+
 def truncate_data(data: list[dict], model_name: str, max_length: int = 400) -> list[dict]:
     LOGGER.info(f"Initializing tokenizer for truncation (max_length={max_length})...")
     try:
@@ -46,15 +126,11 @@ def truncate_data(data: list[dict], model_name: str, max_length: int = 400) -> l
         return data
 
     truncated_count = 0
-    # 遍历所有数据
     for item in data:
         for key, value in item.items():
             if isinstance(value, str):
-                # 编码
                 tokens = tokenizer.encode(value, add_special_tokens=False)
-                # 检查长度
                 if len(tokens) > max_length:
-                    # 截断
                     item[key] = tokenizer.decode(tokens[:max_length])
                     truncated_count += 1
 
@@ -67,15 +143,11 @@ def truncate_data(data: list[dict], model_name: str, max_length: int = 400) -> l
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
-    # 1. 加载数据
     train_data = _load_train_data()
 
-    # 2. 数据截断
-    # 4090 显存较大，且 Qwen 支持长文本。
-    # 建议改为 2048，这样能保留更多语义信息，提升 RepReader 的准确性。
-    # 注意：如果发现显存溢出 (OOM)，可以将这里回调至 1024。
-    train_data = truncate_data(train_data, MODEL_NAME, max_length=450)
-    #train_data = truncate_data(train_data, MODEL_NAME, max_length=2048)
+    # phi-2 先控制在 1024 tokens，优先保证能够稳定生成新的 rep_reader。
+    # 如果你的显存余量足够，再提升到 2048。
+    train_data = truncate_data(train_data, MODEL_NAME, max_length=1024)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     LOGGER.info(f"Using device: {device}")
@@ -84,12 +156,8 @@ def main() -> None:
         model_name_or_path=MODEL_NAME,
         ntrain=len(train_data),
         rep_token=-1,
-
-        # 当前 batch_size=16 仅适用于 tiny 模型。
-        # 7B 模型在 4090 上运行，必须设为 1 或 2。
-        # 建议先用 1 跑通，如果显存还有剩（可以用 nvidia-smi 观察），再尝试改为 2。
-        batch_size=16,
-        #batch_size=1,
+        # phi-2 先用 batch_size=1，稳定优先。
+        batch_size=1,
         random_seed=2025,
         device=device,
     )

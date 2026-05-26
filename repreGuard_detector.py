@@ -30,6 +30,7 @@ class AIHumanFunctionModel:
         n_difference=1,
         direction_method='pca',
         device=None,
+        torch_dtype=None,
     ):
         set_seed(random_seed)
         random.seed(random_seed)
@@ -39,8 +40,12 @@ class AIHumanFunctionModel:
             device = "cuda" if torch.cuda.is_available() else "cpu"
         self.device = torch.device(device)
         self.model_name = os.path.basename(model_name_or_path)
-        self.model = AutoModelForCausalLM.from_pretrained(model_name_or_path)
+        model_kwargs = {}
+        if torch_dtype is not None:
+            model_kwargs["torch_dtype"] = torch_dtype
+        self.model = AutoModelForCausalLM.from_pretrained(model_name_or_path, **model_kwargs)
         self.model.to(self.device)
+        self.model.eval()
         use_fast_tokenizer = "LlamaForCausalLM" not in self.model.config.architectures
         self.tokenizer = AutoTokenizer.from_pretrained(model_name_or_path, use_fast_tokenizer=use_fast_tokenizer, padding_side="left", legacy=False)
         self.tokenizer.pad_token_id = 0
@@ -186,26 +191,29 @@ class AIHumanFunctionModel:
                 "REPRE_GUARD_READER_PATH 加载已保存的方向向量。"
             )
 
-        H_test_token = self.rep_reading_pipeline(
-            [text],
-            rep_reader=self.rep_reader,
-            rep_token=0,
-            hidden_layers=self.hidden_layers,
-        )
-        all_token_scores = []
-        num_tokens = len(H_test_token[0][-1][0])
+        with torch.inference_mode():
+            H_test_token = self.rep_reading_pipeline(
+                [text],
+                rep_reader=self.rep_reader,
+                rep_token=0,
+                hidden_layers=self.hidden_layers,
+            )
+            all_token_scores = []
+            num_tokens = len(H_test_token[0][-1][0])
 
-        for token_idx in range(1, num_tokens, 1):
-            token_scores = []
-            for layer in self.hidden_layers:
-                token_score_in_layer = (
-                    H_test_token[0][layer][0][token_idx]
-                    * self.rep_reader.direction_signs[layer][0]
-                )
-                token_scores.append(token_score_in_layer)
-            all_token_scores.append(token_scores)
+            for token_idx in range(1, num_tokens, 1):
+                token_scores = []
+                for layer in self.hidden_layers:
+                    token_score_in_layer = (
+                        H_test_token[0][layer][0][token_idx]
+                        * self.rep_reader.direction_signs[layer][0]
+                    )
+                    token_scores.append(token_score_in_layer)
+                all_token_scores.append(token_scores)
 
-        return float(np.mean(all_token_scores))
+            score = float(np.mean(all_token_scores))
+            del H_test_token
+            return score
 
     def process_test_data(self,test_data):
         # logging.info(f"Test in {test_data_path}")
