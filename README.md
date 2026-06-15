@@ -104,6 +104,20 @@ Response:
 }
 ```
 
+## Direct Load Test
+
+This bypasses the AIDetector backend quota, auth, database, and history path. It only tests the detector API:
+
+```powershell
+D:\Anaconda\envs\lab\python.exe .\loadtest_detector_api.py `
+  --url https://umcat.cis.um.edu.mo/api/aidetect.php `
+  --users 100 `
+  --rounds 1 `
+  --chars 500
+```
+
+The report is written to `loadtest_results/detector-api-YYYYMMDD-HHMMSS.json`.
+
 ## Legacy Files
 
 `repreGuard_detector.py`, `init_tiny_model.py`, `repe/`, and `saved_rep_reader.pt` belong to the V1 representation-reading detector path. The V2.0 RoBERTa service path does not require `saved_rep_reader.pt`.
