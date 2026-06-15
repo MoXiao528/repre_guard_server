@@ -1,6 +1,7 @@
 results/
 logs/
 baselines/
+loadtest_results/
 _*
 *.ipynb
 vis/
