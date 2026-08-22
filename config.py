@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 
@@ -12,6 +12,7 @@ DEFAULT_MODEL_CACHE_DIR = Path(r"D:\huggingface")
 DEFAULT_MODEL_PATH = DEFAULT_MODEL_CACHE_DIR / "WUJUNCHAO" / "DetectRL-X-XLM-RoBERTa-Detector-All"
 DEFAULT_MODEL_THRESHOLD = 0.0028
 DEFAULT_AI_LABEL_ID = 1
+MIN_SERVICE_TOKEN_LENGTH = 32
 REQUIRED_MODEL_FILES = (
     "config.json",
     "model.safetensors",
@@ -43,6 +44,10 @@ def _bool_env(name: str, default: bool) -> bool:
     return raw_value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def is_valid_service_token(token: str) -> bool:
+    return len(token) >= MIN_SERVICE_TOKEN_LENGTH and all(0x21 <= ord(char) <= 0x7E for char in token)
+
+
 def _read_json_file(path: Path) -> dict:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
@@ -72,6 +77,18 @@ class RepreGuardConfig:
     host: str = os.getenv("REPRE_GUARD_HOST", "0.0.0.0")
     port: int = _int_env("REPRE_GUARD_PORT", 9000)
     log_level: str = os.getenv("REPRE_GUARD_LOG_LEVEL", "info")
+    service_token: str = field(
+        default_factory=lambda: os.getenv("REPRE_GUARD_SERVICE_TOKEN", ""),
+        repr=False,
+    )
+
+    def require_service_token(self) -> str:
+        token = self.service_token
+        if not is_valid_service_token(token):
+            raise RuntimeError(
+                "REPRE_GUARD_SERVICE_TOKEN must contain at least 32 printable ASCII characters without whitespace."
+            )
+        return token
 
     def validate_model_path(self) -> None:
         missing_files = [name for name in REQUIRED_MODEL_FILES if not (self.model_path / name).is_file()]

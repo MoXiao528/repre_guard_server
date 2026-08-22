@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import json
 import math
+import os
 import statistics
 import time
 from collections import Counter
@@ -13,8 +14,10 @@ from typing import Any
 
 import httpx
 
+from config import is_valid_service_token
 
-DEFAULT_URL = "https://umcat.cis.um.edu.mo/api/aidetect.php"
+
+DEFAULT_URL = "http://127.0.0.1:9000/detect"
 DEFAULT_USERS = 100
 DEFAULT_ROUNDS = 1
 DEFAULT_CHARS = 500
@@ -25,7 +28,7 @@ SENTENCES = [
     "This load test sample describes a normal product review workflow with clear context and ordinary business language. ",
     "The team checks the service response, compares latency between requests, and records failed samples for later debugging. ",
     "The text intentionally avoids unusual symbols, repeated random tokens, and adversarial wording so the detector receives realistic input. ",
-    "Each request exercises the public detection endpoint and returns the model score, threshold, label, and score type. ",
+    "Each request exercises the internal detection endpoint and returns the model score, threshold, label, and score type. ",
     "The report keeps per-request timing, status codes, response sizes, and a small set of failure details for quick inspection. ",
 ]
 
@@ -99,13 +102,18 @@ async def detect_once(
     text: str,
     request_id: int,
     round_index: int,
+    service_token: str,
 ) -> dict[str, Any]:
     started = time.perf_counter()
     started_at = datetime.now(timezone.utc).isoformat()
     try:
         response = await client.post(
             url,
-            headers={"Accept": "application/json", "Content-Type": "application/json"},
+            headers={
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "X-RepreGuard-Token": service_token,
+            },
             json={"text": text},
         )
         elapsed_ms = round((time.perf_counter() - started) * 1000, 2)
@@ -155,7 +163,7 @@ async def detect_once(
         }
 
 
-async def run_loadtest(args: argparse.Namespace) -> dict[str, Any]:
+async def run_loadtest(args: argparse.Namespace, *, service_token: str) -> dict[str, Any]:
     limits = httpx.Limits(max_connections=args.users, max_keepalive_connections=args.users)
     timeout = httpx.Timeout(args.timeout)
     results: list[dict[str, Any]] = []
@@ -178,6 +186,7 @@ async def run_loadtest(args: argparse.Namespace) -> dict[str, Any]:
                         text=build_text(args.chars, sequence),
                         request_id=sequence + 1,
                         round_index=round_index,
+                        service_token=service_token,
                     )
                 )
             results.extend(await asyncio.gather(*batch))
@@ -222,12 +231,17 @@ async def async_main() -> None:
     require_positive("--users", args.users)
     require_positive("--rounds", args.rounds)
     require_positive("--chars", args.chars)
+    service_token = os.getenv("REPRE_GUARD_SERVICE_TOKEN", "")
+    if not is_valid_service_token(service_token):
+        raise SystemExit(
+            "REPRE_GUARD_SERVICE_TOKEN must contain at least 32 printable ASCII characters without whitespace."
+        )
 
     print(
         f"target={args.url} users={args.users} rounds={args.rounds} "
         f"requests={args.users * args.rounds} chars≈{args.users * args.rounds * args.chars}"
     )
-    report = await run_loadtest(args)
+    report = await run_loadtest(args, service_token=service_token)
     report_path = write_report(report)
     print(
         f"done: success={report['success_count']} failure={report['failure_count']} "

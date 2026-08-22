@@ -58,9 +58,16 @@ REPRE_GUARD_THRESHOLD=0.0028
 REPRE_GUARD_AI_LABEL_ID=1
 REPRE_GUARD_TOKENIZER_USE_FAST=false
 REPRE_GUARD_MAX_INPUT_TOKENS=512
+REPRE_GUARD_HOST=0.0.0.0
+REPRE_GUARD_PORT=9000
+REPRE_GUARD_SERVICE_TOKEN=<shared service token>
 ```
 
 Production should run from the pinned local model files. Set `REPRE_GUARD_LOCAL_FILES_ONLY=false` only for an explicit download/cache warm-up flow.
+
+`REPRE_GUARD_SERVICE_TOKEN` is mandatory and must contain at least 32 printable ASCII characters without whitespace. RepreGuard validates it before loading the model. Use the same value in the AIDetector backend; never commit it or print it in logs.
+
+The default `0.0.0.0` bind is intentional for the local Docker backend to reach the Windows-hosted detector through `host.docker.internal`. Keep the port blocked from untrusted networks with the host firewall.
 
 Inputs longer than `REPRE_GUARD_MAX_INPUT_TOKENS` are rejected with `INPUT_TOO_LONG`; the service no longer silently truncates detection input.
 
@@ -68,6 +75,9 @@ Inputs longer than `REPRE_GUARD_MAX_INPUT_TOKENS` are rejected with `INPUT_TOO_L
 
 ```powershell
 pip install -r requirements.txt
+
+$env:REPRE_GUARD_SERVICE_TOKEN = python -c "import secrets; print(secrets.token_urlsafe(32))"
+
 D:\Anaconda\envs\lab\python.exe .\run_roberta_server.py
 ```
 
@@ -82,6 +92,21 @@ PowerShell wrapper:
 ```text
 GET  /health
 POST /detect
+```
+
+Both endpoints are internal and require this header:
+
+```text
+X-RepreGuard-Token: <REPRE_GUARD_SERVICE_TOKEN>
+```
+
+Missing, incorrect, or duplicate token headers return `401` before the request body or model is touched. `/detect` accepts at most 131072 request-body bytes; the limit is checked from both `Content-Length` and the actual ASGI body stream before JSON parsing. Invalid or duplicate `Content-Length` returns `400`, and an oversized body returns `413`.
+
+Authenticated health probe:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:9000/health `
+  -Headers @{ "X-RepreGuard-Token" = $env:REPRE_GUARD_SERVICE_TOKEN }
 ```
 
 Request:
@@ -106,11 +131,11 @@ Response:
 
 ## Direct Load Test
 
-This bypasses the AIDetector backend quota, auth, database, and history path. It only tests the detector API:
+This bypasses the AIDetector backend quota, user auth, database, and history path. It still uses the internal detector service token from `REPRE_GUARD_SERVICE_TOKEN`:
 
 ```powershell
 D:\Anaconda\envs\lab\python.exe .\loadtest_detector_api.py `
-  --url https://umcat.cis.um.edu.mo/api/aidetect.php `
+  --url http://127.0.0.1:9000/detect `
   --users 100 `
   --rounds 1 `
   --chars 500

@@ -5,6 +5,8 @@ from fastapi import FastAPI, HTTPException, status
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
+from config import settings
+from ingress import DetectorIngressMiddleware
 from repreGuard_service import DetectResult, DetectServiceError, detect_text, get_detector
 
 
@@ -21,12 +23,14 @@ class DetectResponse(BaseModel):
 
 
 app = FastAPI(title="RepreGuard Detect Service")
+app.add_middleware(DetectorIngressMiddleware, service_token=settings.service_token)
 GPU_SEMAPHORE = asyncio.Semaphore(1)
 
 
 @app.on_event("startup")
 def load_detector() -> None:
     """Initialize the detector pipeline once at process startup."""
+    settings.require_service_token()
     get_detector()
 
 
