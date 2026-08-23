@@ -1,9 +1,14 @@
 from __future__ import annotations
 
-import os
 import json
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from dotenv import load_dotenv
+
+
+load_dotenv(Path(__file__).resolve().with_name(".env"), override=False)
 
 
 DEFAULT_MODEL_NAME = "WUJUNCHAO/DetectRL-X-XLM-RoBERTa-Detector-All"

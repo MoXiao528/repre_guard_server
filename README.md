@@ -46,7 +46,13 @@ If the local directory does not exist, the service falls back to the pinned Hugg
 
 ## Configuration
 
-Environment variables:
+Copy `.env.example` to `.env`, then configure the service. RepreGuard always resolves this file next to
+`config.py`, so startup does not depend on the current working directory. Explicit process/container environment
+variables take precedence over `.env`.
+
+The paths below match the local Windows setup. On Linux, set `REPRE_GUARD_MODEL_CACHE_DIR` and
+`REPRE_GUARD_MODEL_PATH` in `.env` to real absolute server paths, such as the commented examples in
+`.env.example`.
 
 ```text
 REPRE_GUARD_MODEL_NAME=WUJUNCHAO/DetectRL-X-XLM-RoBERTa-Detector-All
@@ -60,24 +66,23 @@ REPRE_GUARD_TOKENIZER_USE_FAST=false
 REPRE_GUARD_MAX_INPUT_TOKENS=512
 REPRE_GUARD_HOST=0.0.0.0
 REPRE_GUARD_PORT=9000
-REPRE_GUARD_SERVICE_TOKEN=<shared service token>
+REPRE_GUARD_SERVICE_TOKEN=<same value as AIDetector-Back/.env>
 ```
 
 Production should run from the pinned local model files. Set `REPRE_GUARD_LOCAL_FILES_ONLY=false` only for an explicit download/cache warm-up flow.
 
-`REPRE_GUARD_SERVICE_TOKEN` is mandatory and must contain at least 32 printable ASCII characters without whitespace. RepreGuard validates it before loading the model. Use the same value in the AIDetector backend; never commit it or print it in logs.
+`REPRE_GUARD_SERVICE_TOKEN` is mandatory and must contain at least 32 printable ASCII characters without whitespace. Generate it once, then put the same value in `AIDetector-Back/.env` and this repository's `.env`. RepreGuard validates it before loading the model; never commit it or print it in logs.
 
 The default `0.0.0.0` bind is intentional for the local Docker backend to reach the Windows-hosted detector through `host.docker.internal`. Keep the port blocked from untrusted networks with the host firewall.
 
 Inputs longer than `REPRE_GUARD_MAX_INPUT_TOKENS` are rejected with `INPUT_TOO_LONG`; the service no longer silently truncates detection input.
 
-## Start
+## Start on Windows
 
 ```powershell
-pip install -r requirements.txt
-
-$env:REPRE_GUARD_SERVICE_TOKEN = python -c "import secrets; print(secrets.token_urlsafe(32))"
-
+D:\Anaconda\envs\lab\python.exe -m pip install -r requirements.txt
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
+# Edit .env and copy the existing REPRE_GUARD_SERVICE_TOKEN from AIDetector-Back/.env.
 D:\Anaconda\envs\lab\python.exe .\run_roberta_server.py
 ```
 
@@ -85,6 +90,17 @@ PowerShell wrapper:
 
 ```powershell
 .\run_local_roberta_server.ps1
+```
+
+## Start on Linux
+
+```bash
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install -r requirements.txt
+test -f .env || cp .env.example .env
+# Edit .env: set the shared token and Linux model paths before starting.
+python run_roberta_server.py
 ```
 
 ## Endpoints
@@ -105,8 +121,13 @@ Missing, incorrect, or duplicate token headers return `401` before the request b
 Authenticated health probe:
 
 ```powershell
+$serviceToken = $env:REPRE_GUARD_SERVICE_TOKEN
+if ([string]::IsNullOrWhiteSpace($serviceToken)) {
+  $serviceToken = (Get-Content .env | Where-Object { $_ -like "REPRE_GUARD_SERVICE_TOKEN=*" } | Select-Object -First 1) `
+    -replace "^REPRE_GUARD_SERVICE_TOKEN=", ""
+}
 Invoke-RestMethod http://127.0.0.1:9000/health `
-  -Headers @{ "X-RepreGuard-Token" = $env:REPRE_GUARD_SERVICE_TOKEN }
+  -Headers @{ "X-RepreGuard-Token" = $serviceToken }
 ```
 
 Request:
