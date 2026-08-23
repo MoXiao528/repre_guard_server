@@ -64,6 +64,8 @@ REPRE_GUARD_THRESHOLD=0.0028
 REPRE_GUARD_AI_LABEL_ID=1
 REPRE_GUARD_TOKENIZER_USE_FAST=false
 REPRE_GUARD_MAX_INPUT_TOKENS=512
+REPRE_GUARD_MAX_PENDING_REQUESTS=3
+REPRE_GUARD_QUEUE_TIMEOUT_SECONDS=15
 REPRE_GUARD_HOST=0.0.0.0
 REPRE_GUARD_PORT=9000
 REPRE_GUARD_SERVICE_TOKEN=<same value as AIDetector-Back/.env>
@@ -76,6 +78,10 @@ Production should run from the pinned local model files. Set `REPRE_GUARD_LOCAL_
 The default `0.0.0.0` bind is intentional for the local Docker backend to reach the Windows-hosted detector through `host.docker.internal`. Keep the port blocked from untrusted networks with the host firewall.
 
 Inputs longer than `REPRE_GUARD_MAX_INPUT_TOKENS` are rejected with `INPUT_TOO_LONG`; the service no longer silently truncates detection input.
+
+Inference admission is bounded to one active GPU request plus `REPRE_GUARD_MAX_PENDING_REQUESTS` queued requests. The defaults allow one active request and three queued requests, matching the backend's four concurrent text segments. A fifth request is rejected immediately with `503 DETECT_QUEUE_FULL`; a request waiting longer than `REPRE_GUARD_QUEUE_TIMEOUT_SECONDS` returns `503 DETECT_QUEUE_TIMEOUT`. Both responses include an integer `Retry-After` header (5 seconds with the defaults). A queued request that disconnects is removed and never reaches the model.
+
+Tune the queue from a warmed-up local single-request measurement: `max pending <= floor(max acceptable wait / p95 inference time)`. The default `3` and `15` seconds assume p95 inference is at most 5 seconds. Keep the queue timeout below the backend's detect-service timeout.
 
 ## Start on Windows
 
@@ -163,6 +169,8 @@ D:\Anaconda\envs\lab\python.exe .\loadtest_detector_api.py `
 ```
 
 The report is written to `loadtest_results/detector-api-YYYYMMDD-HHMMSS.json`.
+
+With bounded admission, a burst larger than the configured active-plus-pending capacity is expected to contain `503` responses instead of building an unbounded wait queue.
 
 ## Legacy Files
 

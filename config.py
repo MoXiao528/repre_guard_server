@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -78,6 +79,8 @@ class RepreGuardConfig:
     ai_label_id: int = _int_env("REPRE_GUARD_AI_LABEL_ID", DEFAULT_AI_LABEL_ID)
     tokenizer_use_fast: bool = _bool_env("REPRE_GUARD_TOKENIZER_USE_FAST", False)
     max_input_tokens: int = _int_env("REPRE_GUARD_MAX_INPUT_TOKENS", 512)
+    max_pending_requests: int = _int_env("REPRE_GUARD_MAX_PENDING_REQUESTS", 3)
+    queue_timeout_seconds: float = _float_env("REPRE_GUARD_QUEUE_TIMEOUT_SECONDS", 15.0)
     device: str = os.getenv("REPRE_GUARD_DEVICE", "auto").strip().lower() or "auto"
     host: str = os.getenv("REPRE_GUARD_HOST", "0.0.0.0")
     port: int = _int_env("REPRE_GUARD_PORT", 9000)
@@ -94,6 +97,12 @@ class RepreGuardConfig:
                 "REPRE_GUARD_SERVICE_TOKEN must contain at least 32 printable ASCII characters without whitespace."
             )
         return token
+
+    def require_valid_admission_settings(self) -> None:
+        if not 0 <= self.max_pending_requests <= 32:
+            raise RuntimeError("REPRE_GUARD_MAX_PENDING_REQUESTS must be between 0 and 32.")
+        if not math.isfinite(self.queue_timeout_seconds) or not 0 < self.queue_timeout_seconds <= 60:
+            raise RuntimeError("REPRE_GUARD_QUEUE_TIMEOUT_SECONDS must be greater than 0 and at most 60.")
 
     def validate_model_path(self) -> None:
         missing_files = [name for name in REQUIRED_MODEL_FILES if not (self.model_path / name).is_file()]

@@ -131,6 +131,6 @@ class DetectorIngressMiddleware:
             if not replayed:
                 replayed = True
                 return {"type": "http.request", "body": bytes(body), "more_body": False}
-            return {"type": "http.request", "body": b"", "more_body": False}
+            return await receive()
 
         await self.app(scope, replay_receive, send)

@@ -199,6 +199,48 @@ class IngressTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.status(sent), 204)
         self.assertEqual(downstream.bodies, [body])
 
+    async def test_receive_after_replayed_body_observes_original_disconnect(self) -> None:
+        observed: list[dict[str, Any]] = []
+
+        async def downstream(
+            _scope: dict[str, Any],
+            receive: Callable[[], Awaitable[dict[str, Any]]],
+            send: Callable[[dict[str, Any]], Awaitable[None]],
+        ) -> None:
+            observed.append(await receive())
+            observed.append(await receive())
+            await send({"type": "http.response.start", "status": 204, "headers": []})
+            await send({"type": "http.response.body", "body": b""})
+
+        source_messages = [
+            {"type": "http.request", "body": b'{"text":"sample"}', "more_body": False},
+            {"type": "http.disconnect"},
+        ]
+        sent: list[dict[str, Any]] = []
+
+        async def receive() -> dict[str, Any]:
+            return source_messages.pop(0)
+
+        async def send(message: dict[str, Any]) -> None:
+            sent.append(message)
+
+        middleware = DetectorIngressMiddleware(downstream, SERVICE_TOKEN)
+        await middleware(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": "/detect",
+                "headers": [TOKEN_HEADER],
+            },
+            receive,
+            send,
+        )
+
+        self.assertEqual(observed[0]["type"], "http.request")
+        self.assertEqual(observed[0]["body"], b'{"text":"sample"}')
+        self.assertEqual(observed[1], {"type": "http.disconnect"})
+        self.assertEqual(self.status(sent), 204)
+
     async def test_twenty_thousand_chinese_characters_fit_the_ingress_limit(self) -> None:
         body = json.dumps({"text": "测" * 20_000}, ensure_ascii=False).encode("utf-8")
         self.assertLess(len(body), DETECT_BODY_LIMIT_BYTES)
