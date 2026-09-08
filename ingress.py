@@ -10,7 +10,7 @@ from config import is_valid_service_token
 
 DETECT_BODY_LIMIT_BYTES = 128 * 1024
 SERVICE_TOKEN_HEADER = b"x-repreguard-token"
-PROTECTED_PATHS = frozenset({"/detect", "/health"})
+PROTECTED_PATHS = frozenset({"/detect", "/health", "/evidence/route"})
 
 ASGIMessage = dict[str, Any]
 Receive = Callable[[], Awaitable[ASGIMessage]]

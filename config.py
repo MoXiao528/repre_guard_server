@@ -85,6 +85,11 @@ class RepreGuardConfig:
     host: str = os.getenv("REPRE_GUARD_HOST", "0.0.0.0")
     port: int = _int_env("REPRE_GUARD_PORT", 9000)
     log_level: str = os.getenv("REPRE_GUARD_LOG_LEVEL", "info")
+    # Optional Evidence values are validated by its local consumer, not at import/startup.
+    evidence_enabled: str = os.getenv("REPRE_GUARD_EVIDENCE_ENABLED", "false")
+    evidence_model_path: str = os.getenv("REPRE_GUARD_EVIDENCE_MODEL_PATH", "")
+    evidence_artifact_sha256: str = os.getenv("REPRE_GUARD_EVIDENCE_ARTIFACT_SHA256", "")
+    evidence_timeout_seconds: str = os.getenv("REPRE_GUARD_EVIDENCE_TIMEOUT_SECONDS", "10")
     service_token: str = field(
         default_factory=lambda: os.getenv("REPRE_GUARD_SERVICE_TOKEN", ""),
         repr=False,
