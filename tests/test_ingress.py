@@ -25,7 +25,7 @@ class RecordingApp:
     ) -> None:
         self.calls += 1
         body = b""
-        if scope["path"] == "/detect":
+        if scope["path"] in {"/detect", "/evidence/route"}:
             while True:
                 message = await receive()
                 body += message.get("body", b"")
@@ -43,6 +43,8 @@ class RecordingApp:
 
 
 class IngressTestCase(unittest.IsolatedAsyncioTestCase):
+    protected_path = "/detect"
+
     async def invoke(
         self,
         *,
@@ -77,7 +79,7 @@ class IngressTestCase(unittest.IsolatedAsyncioTestCase):
         await middleware(
             {
                 "type": "http",
-                "method": "POST" if path == "/detect" else "GET",
+                "method": "GET" if path == "/health" else "POST",
                 "path": path,
                 "headers": headers or [],
             },
@@ -229,7 +231,7 @@ class IngressTestCase(unittest.IsolatedAsyncioTestCase):
             {
                 "type": "http",
                 "method": "POST",
-                "path": "/detect",
+                "path": self.protected_path,
                 "headers": [TOKEN_HEADER],
             },
             receive,
@@ -260,6 +262,17 @@ class IngressTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.status(sent), 204)
         self.assertEqual(downstream.calls, 1)
         self.assertEqual(receive_calls, 0)
+
+
+# Run the same trust-boundary cases against the Evidence path, including streamed
+# bodies, forged lengths and disconnect replay; keep health/unrelated paths intact.
+class EvidenceIngressTestCase(IngressTestCase):
+    protected_path = "/evidence/route"
+
+    async def invoke(self, *, path, **kwargs):
+        return await super().invoke(
+            path="/evidence/route" if path == "/detect" else path, **kwargs
+        )
 
 
 if __name__ == "__main__":
