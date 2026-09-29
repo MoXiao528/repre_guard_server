@@ -226,9 +226,10 @@ app.add_middleware(DetectorIngressMiddleware, service_token=settings.service_tok
 
 @app.on_event("startup")
 def load_detector() -> None:
-    """Initialize the detector pipeline once at process startup."""
+    """Load and warm the detector before accepting requests."""
     settings.require_service_token()
-    get_detector()
+    detector = get_detector()
+    detector.predict_text("Warmup " * detector.max_length)
 
 
 @app.on_event("startup")
