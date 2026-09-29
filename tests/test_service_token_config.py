@@ -92,6 +92,20 @@ class ServiceTokenConfigTestCase(unittest.TestCase):
 
         get_detector.assert_not_called()
 
+    def test_startup_warms_detector_before_serving(self) -> None:
+        import server
+
+        with (
+            patch.object(server, "settings", RepreGuardConfig(
+                service_token="detector-test-token-that-is-at-least-32-characters",
+            )),
+            patch.object(server, "get_detector") as get_detector,
+        ):
+            get_detector.return_value.max_length = 512
+            server.load_detector()
+
+        get_detector.return_value.predict_text.assert_called_once_with("Warmup " * 512)
+
     def test_admission_settings_are_bounded(self) -> None:
         for max_pending in (-1, 33):
             with self.subTest(max_pending=max_pending):
