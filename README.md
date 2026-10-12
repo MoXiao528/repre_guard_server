@@ -1,8 +1,85 @@
-# RepreGuard Server V2.0
+# RepreGuard
 
-FastAPI detection service for AIDetector V2.0.
+AIDetector 的文本检测服务，基于 FastAPI 提供 AI/Human 检测和可选的 Evidence 路由。
 
-V2.0 serves the DetectRL-X XLM-RoBERTa detector and keeps a strict probability contract:
+```text
+AIDetector-web → AIDetector-Back → RepreGuard
+```
+
+本服务负责模型推理；用户、配额和检测历史由后端管理。
+
+## 模型
+
+主检测使用 [DetectRL-X XLM-RoBERTa Detector](https://huggingface.co/WUJUNCHAO/DetectRL-X-XLM-RoBERTa-Detector-All)，模型版本由 `config.py` 固定。
+
+`score` 是模型对 AI 类别 `LABEL_1` 的概率输出。默认阈值为 `0.0028`：达到阈值返回 `AI`，否则返回 `HUMAN`。
+
+支持 CUDA 和 CPU，默认优先使用 CUDA。
+
+## 快速开始
+
+需要 Python 3.10 或以上版本。以下命令均在仓库根目录执行。
+
+### 1. 安装依赖
+
+```bash
+python -m pip install -r requirements.txt
+python -c "from pathlib import Path; import shutil; shutil.copyfile('.env.example', '.env') if not Path('.env').exists() else None"
+```
+
+### 2. 配置环境
+
+编辑 `.env`：
+
+```dotenv
+REPRE_GUARD_SERVICE_TOKEN=<与后端一致的服务令牌>
+REPRE_GUARD_MODEL_PATH=./models/detector
+REPRE_GUARD_MODEL_CACHE_DIR=./models/cache
+```
+
+服务令牌至少包含 32 个无空白的可打印 ASCII 字符。`.env` 和模型文件不要提交到仓库。
+
+### 3. 下载模型
+
+以下命令下载配置中锁定的模型版本及必需文件：
+
+```bash
+python -c "from huggingface_hub import snapshot_download; from config import REQUIRED_MODEL_FILES, settings; snapshot_download(repo_id=settings.model_name, revision=settings.model_revision, local_dir=settings.model_path, allow_patterns=list(REQUIRED_MODEL_FILES))"
+```
+
+### 4. 启动服务
+
+```bash
+python run_roberta_server.py
+```
+
+默认监听 `0.0.0.0:9000`，启动时自动加载并预热模型。服务采用单 worker，访问范围应由网络或防火墙限制。
+
+## 接口
+
+下列三个服务接口都需要请求头：
+
+```text
+X-RepreGuard-Token: <服务令牌>
+```
+
+| 方法 | 路径 | 用途 |
+| --- | --- | --- |
+| GET | `/health` | 健康检查 |
+| POST | `/detect` | AI/Human 检测 |
+| POST | `/evidence/route` | Evidence 语言、领域路由 |
+
+### 文本检测
+
+请求：
+
+```json
+{
+  "text": "需要检测的文本。"
+}
+```
+
+响应示例：
 
 ```json
 {
@@ -14,370 +91,26 @@ V2.0 serves the DetectRL-X XLM-RoBERTa detector and keeps a strict probability c
 }
 ```
 
-For DetectRL-X, `score` is the AI probability for `LABEL_1`; `threshold` is the calibrated probability threshold.
-`score_type` is always `probability`; clients should reject missing or different values instead of guessing.
+客户端应检查 `score_type`，不能将其他类型的分数当作概率使用。
 
-## V2.0 Model
+输入限制：请求体最多 128 KiB；文本为 1～20,000 个 Unicode 码点且不能全为空白；主检测最多 512 tokens，包含特殊 tokens。token 超限返回 `422 INPUT_TOO_LONG`，不会静默截断。
 
-Default model:
+默认同时执行一个主检测请求，最多三个请求等待，等待上限为 15 秒。队列满或等待超时返回 `503`。
 
-```text
-WUJUNCHAO/DetectRL-X-XLM-RoBERTa-Detector-All
-```
+## Evidence 路由
 
-The model config does not publish semantic label names, so deployment pins:
+Evidence 默认关闭，通过 `.env` 中的 `REPRE_GUARD_EVIDENCE_*` 配置启用，需要单独提供 Router 模型目录和产物 SHA-256。
 
-```text
-AI label = LABEL_1
-threshold = 0.0028
-```
+Router 在 CPU 上判断整篇文本的语言和领域，供后端选择写作特点参考统计。它不生成 AI 分数，不修改主检测结果。
 
-## Download Model
+该接口的业务结果使用 HTTP `200`，调用方必须检查 `status` 和 `reason`；未启用或加载失败时返回 `failed/model_unavailable`。鉴权和输入错误使用非 2xx 状态。
 
-Recommended local model directory:
-
-```powershell
-D:\Anaconda\envs\lab\python.exe -c "from huggingface_hub import snapshot_download; snapshot_download(repo_id='WUJUNCHAO/DetectRL-X-XLM-RoBERTa-Detector-All', revision='76649a0257a812a81cf36b5de9cc5f2430aeaa7f', local_dir=r'D:\huggingface\WUJUNCHAO\DetectRL-X-XLM-RoBERTa-Detector-All', allow_patterns=['config.json','model.safetensors','sentencepiece.bpe.model','special_tokens_map.json','tokenizer_config.json'])"
-```
-
-If the local directory exists, startup validates the required files and the pinned revision recorded in Hugging Face `*.metadata` files or a local `.repre_guard_model_manifest.json` / `model_manifest.json`. A directory with only `model.safetensors`, missing tokenizer/config files, or files from a different revision is rejected before the server starts.
-
-If the local directory does not exist, the service falls back to the pinned Hugging Face repo revision with cache directory `D:\huggingface`. With the production default `REPRE_GUARD_LOCAL_FILES_ONLY=true`, that fallback still requires the files to be present locally.
-
-## Configuration
-
-Copy `.env.example` to `.env`, then configure the service. RepreGuard always resolves this file next to
-`config.py`, so startup does not depend on the current working directory. Explicit process/container environment
-variables take precedence over `.env`.
-
-The paths below match the local Windows setup. On Linux, set `REPRE_GUARD_MODEL_CACHE_DIR` and
-`REPRE_GUARD_MODEL_PATH` in `.env` to real absolute server paths, such as the commented examples in
-`.env.example`.
-
-```text
-REPRE_GUARD_MODEL_NAME=WUJUNCHAO/DetectRL-X-XLM-RoBERTa-Detector-All
-REPRE_GUARD_MODEL_REVISION=76649a0257a812a81cf36b5de9cc5f2430aeaa7f
-REPRE_GUARD_MODEL_CACHE_DIR=D:\huggingface
-REPRE_GUARD_MODEL_PATH=D:\huggingface\WUJUNCHAO\DetectRL-X-XLM-RoBERTa-Detector-All
-REPRE_GUARD_LOCAL_FILES_ONLY=true
-REPRE_GUARD_THRESHOLD=0.0028
-REPRE_GUARD_AI_LABEL_ID=1
-REPRE_GUARD_TOKENIZER_USE_FAST=false
-REPRE_GUARD_MAX_INPUT_TOKENS=512
-REPRE_GUARD_MAX_PENDING_REQUESTS=3
-REPRE_GUARD_QUEUE_TIMEOUT_SECONDS=15
-REPRE_GUARD_HOST=0.0.0.0
-REPRE_GUARD_PORT=9000
-REPRE_GUARD_SERVICE_TOKEN=<same value as AIDetector-Back/.env>
-```
-
-Production should run from the pinned local model files. Set `REPRE_GUARD_LOCAL_FILES_ONLY=false` only for an explicit download/cache warm-up flow.
-
-`REPRE_GUARD_SERVICE_TOKEN` is mandatory and must contain at least 32 printable ASCII characters without whitespace. Generate it once, then put the same value in `AIDetector-Back/.env` and this repository's `.env`. RepreGuard validates it before loading the model; never commit it or print it in logs.
-
-The default `0.0.0.0` bind is intentional for the local Docker backend to reach the Windows-hosted detector through `host.docker.internal`. Keep the port blocked from untrusted networks with the host firewall.
-
-Inputs longer than `REPRE_GUARD_MAX_INPUT_TOKENS` are rejected with `INPUT_TOO_LONG`; the service no longer silently truncates detection input.
-
-Inference admission is bounded to one active GPU request plus `REPRE_GUARD_MAX_PENDING_REQUESTS` queued requests. The defaults allow one active request and three queued requests, matching the backend's four concurrent text segments. A fifth request is rejected immediately with `503 DETECT_QUEUE_FULL`; a request waiting longer than `REPRE_GUARD_QUEUE_TIMEOUT_SECONDS` returns `503 DETECT_QUEUE_TIMEOUT`. Both responses include an integer `Retry-After` header (5 seconds with the defaults). A queued request that disconnects is removed and never reaches the model.
-
-Tune the queue from a warmed-up local single-request measurement: `max pending <= floor(max acceptable wait / p95 inference time)`. The default `3` and `15` seconds assume p95 inference is at most 5 seconds. Keep the queue timeout below the backend's detect-service timeout.
-
-## Start on Windows
-
-```powershell
-D:\Anaconda\envs\lab\python.exe -m pip install -r requirements.txt
-if (-not (Test-Path .env)) { Copy-Item .env.example .env }
-# Edit .env and copy the existing REPRE_GUARD_SERVICE_TOKEN from AIDetector-Back/.env.
-D:\Anaconda\envs\lab\python.exe .\run_roberta_server.py
-```
-
-PowerShell wrapper:
-
-```powershell
-.\run_local_roberta_server.ps1
-```
-
-## Start on Linux
+## 测试
 
 ```bash
-python3 -m venv .venv
-. .venv/bin/activate
-python -m pip install -r requirements.txt
-test -f .env || cp .env.example .env
-# Edit .env: set the shared token and Linux model paths before starting.
-python run_roberta_server.py
-```
-
-## Endpoints
-
-```text
-GET  /health
-POST /detect
-POST /evidence/route
-```
-
-All three endpoints are internal and require this header. Evidence is disabled by default:
-
-```text
-X-RepreGuard-Token: <REPRE_GUARD_SERVICE_TOKEN>
-```
-
-Missing, incorrect, or duplicate token headers return `401` before the request body or model is touched. `/detect` accepts at most 131072 request-body bytes; the limit is checked from both `Content-Length` and the actual ASGI body stream before JSON parsing. Invalid or duplicate `Content-Length` returns `400`, and an oversized body returns `413`.
-
-Authenticated health probe:
-
-```powershell
-$serviceToken = $env:REPRE_GUARD_SERVICE_TOKEN
-if ([string]::IsNullOrWhiteSpace($serviceToken)) {
-  $serviceToken = (Get-Content .env | Where-Object { $_ -like "REPRE_GUARD_SERVICE_TOKEN=*" } | Select-Object -First 1) `
-    -replace "^REPRE_GUARD_SERVICE_TOKEN=", ""
-}
-Invoke-RestMethod http://127.0.0.1:9000/health `
-  -Headers @{ "X-RepreGuard-Token" = $serviceToken }
-```
-
-Request:
-
-```json
-{
-  "text": "Sample text to classify."
-}
-```
-
-Response:
-
-```json
-{
-  "score": 0.0012,
-  "threshold": 0.0028,
-  "label": "HUMAN",
-  "model_name": "WUJUNCHAO/DetectRL-X-XLM-RoBERTa-Detector-All",
-  "score_type": "probability"
-}
-```
-
-## Direct Load Test
-
-This bypasses the AIDetector backend quota, user auth, database, and history path. It still uses the internal detector service token from `REPRE_GUARD_SERVICE_TOKEN`:
-
-```powershell
-D:\Anaconda\envs\lab\python.exe .\loadtest_detector_api.py `
-  --url http://127.0.0.1:9000/detect `
-  --users 100 `
-  --rounds 1 `
-  --chars 500
-```
-
-The report is written to `loadtest_results/detector-api-YYYYMMDD-HHMMSS.json`.
-
-With bounded admission, a burst larger than the configured active-plus-pending capacity is expected to contain `503` responses instead of building an unbounded wait queue.
-
-## Evidence V1 internal Router
-
-`evidence_router.py` loads the existing production-final Evidence Router on CPU.
-When explicitly enabled, server startup constructs one instance and the internal
-`POST /evidence/route` endpoint checks language support before model inference.
-The backend connects its detection flow to this endpoint once per full document
-(EV4-02) and persists validated Evidence snapshots for history/replay (EV4-04).
-The local real-model backend business chain passed on 2026-09-07. Main detector
-scores, thresholds, labels and `/health` behavior are unchanged; default is off.
-Local real-model acceptance passed on 2026-09-07, completing EV4-07 locally.
-The owner deferred deployment work; the target environment remains unverified.
-Persistent Evidence configuration remains off; local acceptance does not enable public Evidence.
-For current project status, read the
-[Evidence V1 tracker](../../AIDetector-evidence-research/EVIDENCE_V1_IMPLEMENTATION_TRACKER.md).
-
-```python
-from config import settings
-from evidence_router import EvidenceRouter
-
-router = EvidenceRouter(
-    enabled=settings.evidence_enabled,
-    model_path=settings.evidence_model_path,
-    artifact_sha256=settings.evidence_artifact_sha256,
-)
-result = router.predict_route(original_text)
-```
-
-| Configuration | Default | Meaning |
-|---|---|---|
-| `REPRE_GUARD_EVIDENCE_ENABLED` | `false` | Load at server startup; accepts true/false, 1/0, yes/no, on/off |
-| `REPRE_GUARD_EVIDENCE_MODEL_PATH` | empty | Immutable local `production-final/model` directory, not the parent containing research reports |
-| `REPRE_GUARD_EVIDENCE_ARTIFACT_SHA256` | empty | One deployment pin for the six-file Router artifact |
-| `REPRE_GUARD_EVIDENCE_TIMEOUT_SECONDS` | `10` | Finite response deadline, greater than 0 and at most 60 seconds |
-
-These optional settings remain raw strings until the consumer validates them, so
-invalid Evidence settings do not fail the main service's configuration import.
-The local instance has `off/ready/failed` loading states. Off performs no filesystem
-or model work. Construction verifies and loads once; failure is also retained, with
-an explicit new instance/process restart required to retry loading. Invalid settings
-or loading errors disable Evidence without raising into the main startup handler.
-Requests reuse both models and the verified identity without filesystem access or
-repeated SHA calculation. Off does not import or load the language identifier.
-
-The directory must contain exactly `config.json`, `router_config.json`,
-`router_model.safetensors`, `sentencepiece.bpe.model`, `tokenizer.json`, and
-`tokenizer_config.json`. Regular files only; symlinks/reparse points, missing or extra
-entries, changed files, incorrect SHA and incompatible configuration are rejected.
-The two model/router configuration JSON files are canonical and limited to 64 KiB
-each. Router class order, model label maps, and the fast tokenizer's vocabulary,
-special tokens and 512-token contract are validated before inference.
-
-The deployment SHA is the SHA-256 of the canonical six-file claim mapping
-`{filename: {bytes, sha256}}`: UTF-8 JSON with `ensure_ascii=False`, sorted keys,
-`allow_nan=False`, two-space indentation and a trailing newline. It is **not** the
-weight file's SHA. The frozen production Router pin is
-`9a1a5be8f0d7599e682d30c7f50e3deb5f747b59ef720e288f6342e7c944f896`.
-File hashes are computed once to derive that claim; there are no additional
-per-file deployment pins or research-lineage checks. Ordinary changes during load
-are checked by file identity/stat snapshots. Deployment must provide an immutable
-directory; those metadata checks cannot prove immutability against hostile writes.
-
-The consumer preserves the published encoder and nine head state names, loads
-safetensors strictly in CPU FP32, and uses eval/inference mode. It does not import
-the research Trainer or set training seeds, CUDA state or process-wide thread
-limits. Existing `torch/transformers/safetensors/tokenizers/sentencepiece`
-dependencies suffice for this model; no separate Router requirements file is used.
-
-`py3langid==0.4.0` performs the language-support check and is declared
-in the existing `requirements.txt`. It requires Python >=3.10 and NumPy >=2.0.
-The 2026-09-07 isolated candidate screen passed its engineering budgets. These
-small-sample local results do not establish production compatibility, concurrency
-or accuracy guarantees; see the
-[archived screen results](docs/archive/evidence-runtime-acceptance-2026-09-07.md#isolated-py3langid-candidate-screen).
-Only the isolated research cache received an installation; the existing lab/service
-environment has not been changed. Tests can use that existing cache through their
-process-local Python path; deployment must provide the declared dependency.
-
-The identifier retains its full candidate language set with `norm_probs=True` and
-no confidence threshold. Startup caches its public `rank("")` result. Each request
-calls `rank` once on the entire normalized document, before XLM-R tokenization:
-
-- An exact match to the empty-input ranking, or top label `und/zxx`, returns
-  `failed/language_undetermined`. This catches no-information outputs, including
-  the library's alias-folded `sr` result, without labeling them unsupported.
-- A top label outside `ar/de/en/es/fr/pt/ru/zh` returns
-  `unsupported/unsupported_language`; `wuu/yue/ary/arz` are not mapped to `zh/ar`.
-- A supported top label allows the frozen XLM-R route unchanged, even if its
-  language differs from the identifier. Neither confidence nor agreement gates it.
-
-Short and mixed texts follow the same whole-document rule, with no segment voting
-or Mixed result. This fallible classifier is not a universal unknown-language or
-nonlinguistic detector; feature-free checks do not identify all meaningless input.
-
-`predict_route` accepts one original string of 1–20,000 code points. Empty or
-whitespace-only input is invalid. The frozen preprocessing applies NFKC and whitespace
-normalization, tokenizes once, keeps the first 255 and last 255 payload tokens when
-needed, adds two special tokens, and pads to a multiple of eight up to 512 tokens.
-This model input policy does not truncate the backend's full-text feature analysis.
-Each supported request performs one model forward, chooses language from aggregated domain mass,
-then chooses domain within that language. Temperature is 1; low confidence never
-causes abstention. A global 48-class argmax is not the operational route.
-
-Internal results contain only `status`, `routerArtifactSha256`, `route`, and
-`reason`. Successful `status=predicted` returns `{language, domain,
-confidence:{language,domain}}`; confidence values are diagnostic, not correctness
-probabilities. The endpoint wraps a successful internal prediction as `routed`.
-No original text, generator, local path, AI/Human label, score or threshold is returned.
-
-Off returns no route or SHA. Failed loading returns no route/SHA and a fixed
-`invalid_evidence_router_config` or `model_unavailable` reason. Invalid text returns
-`failed/invalid_text`; inference exceptions and invalid model outputs return
-`failed/model_failure`, preserving the loaded SHA. Failures expose no partial route
-or exception text and do not poison subsequent predictions.
-
-The endpoint accepts exactly `{"text":"original full document"}` and requires the
-existing `X-RepreGuard-Token`. The existing ingress enforces 128 KiB including
-streamed bodies; the strict request requires 1–20,000 Unicode code points and
-rejects blank text, coercions and extra fields. Validation errors use a fixed
-message without echoing text. Authentication, body and input failures are non-2xx.
-
-All D1 business results, including `busy/timeout`, use HTTP 200 and exactly five
-fields: `schemaVersion=1`, `status`, `routerArtifactSha256`, `route`, `reason`.
-`routed` has a route and null reason; `unsupported` has null route and
-`unsupported_language`; `failed` has null route and one of `language_undetermined`,
-`model_unavailable`, `model_failure`, `busy`, `timeout`. Off/loading failure returns
-`failed/model_unavailable` with null SHA; ready-instance responses use its cached
-SHA. No LID confidence, original text or internal exception is exposed. The matching
-consumer contract is in AIDetector-Back's `docs/detection-contract.md`, section 10.
-
-Evidence reuses `InferenceAdmission` with a separate one-active, zero-queued slot.
-Its CPU work runs off the event loop. Timeout or request cancellation does not
-release capacity until the worker thread actually exits; further requests return
-`busy`, preventing abandoned work from accumulating. Main detection has its own
-capacity. Shutdown drains both. This bounds concurrent Evidence work but cannot
-kill a hung native thread or isolate process CPU/RSS. Local coexistence and startup
-costs passed the local acceptance budgets in batch 3 below.
-
-Run the synthetic-file and tiny-model checks in the existing development environment:
-
-```powershell
-python -B -m unittest discover -s tests -p test_evidence_router.py -v
 python -B -m unittest discover -s tests -v
 ```
 
-These tests exercise actual ASGI handlers without listeners, fake/tiny XLM-R models,
-language decisions, authentication/body limits, private failures, timeout/cancellation
-capacity retention and main-detector regression. The real py3langid API check skips
-if the package is absent; for local batch-2 acceptance it was run using the existing
-isolated cache and passed without skips. No test downloads or loads the real
-production model. The opt-in real-model run below separately covers local tokenizer/
-model compatibility, startup memory, latency and main-detector coexistence.
-CPU inference avoids adding GPU-resident
-weights but still shares process memory and CPU resources. The frozen EV3 waiver
-and non-certification facts are unchanged; local completion is not serving approval.
+普通测试使用模拟或小型模型，不下载生产模型；部分依赖缺失时会跳过对应检查。
 
-### Opt-in local real-model acceptance (batch 3)
-
-`smoke_evidence_runtime.py` uses the existing development environment and local
-model files. It starts its own single-worker RepreGuard processes on ephemeral
-`127.0.0.1` ports, with temporary tokens and process-local configuration; it does
-not change `.env`, start AIDetector-Back, install packages or download models.
-Normal EOF shutdown drains admissions; a memory-reserve breach or stuck shutdown
-stops only the child created by the script. No production inference code is patched.
-The temporary worker observes call/forward counts and actual model devices.
-
-The three runs are Evidence off, on, and on with an injected 20 ms deadline to
-exercise a real timed-out forward. Main-model samples are 500 characters and are
-checked against its 512-token limit. Eight supported-language examples, Italian,
-no-information input and 20,000-character EN/ZH inputs exercise Evidence; these are
-functional cases, not a new accuracy evaluation. After three main warmups, each
-idle/concurrent main condition has 30 requests; concurrent Evidence uses 20,000
-characters. Actual HTTP results pass the backend's real Bundle-bound validator.
-
-The predeclared local budgets are identical main labels/thresholds, score difference
-at most 1e-6, main P95 increase at most `max(baseline*20%, 50 ms)`, successful Evidence
-responses below the normal 10-second deadline, and available memory above
-`max(2 GiB, total RAM*10%)`. The script leaves the existing CPU thread settings
-unchanged. A failed budget remains a failed report; no automatic retuning occurs.
-
-Run explicitly from this repository; use a new output filename for each run:
-
-```powershell
-D:\Anaconda\envs\lab\python.exe -B smoke_evidence_runtime.py `
-  --router-model D:\Code\AIDetector-evidence-research\outputs\detectrl_x_xlmr_router\production-final\model `
-  --router-sha 9a1a5be8f0d7599e682d30c7f50e3deb5f747b59ef720e288f6342e7c944f896 `
-  --bundle D:\Code\AIDetector-evidence-research\dist\evidence-v1.bundle `
-  --bundle-sha 8abe24fc7e7747f4e2e9b90a80bf26b7999726373fa80e8519a97dffbe7014b2 `
-  --backend-root D:\Code\AIDetector-Back `
-  --lid-site D:\Code\AIDetector-evidence-research\data\cache\py3langid-screen-20260907\site `
-  --output loadtest_results\evidence-runtime-local.json
-```
-
-The script's current local profile requires the main model on CUDA and the Router
-on CPU FP32. Reports contain timings, response metadata and counts, not input text
-or authentication tokens. The JSON report, per-worker observations and diagnostic
-logs use the existing ignored `loadtest_results/` directory. CPU/RSS observations
-include both models in one service process; RSS peaks are sampled every 50 ms.
-
-The 2026-09-07 local real-model acceptance passed, with unchanged main scores,
-labels and thresholds and measured latency/RSS costs within the approved budgets.
-The tested lab differed from the declared dependencies; the target deployment
-remains unverified. See the
-[archived measurements and limitations](docs/archive/evidence-runtime-acceptance-2026-09-07.md#local-real-model-acceptance-batch-3).
-These historical results have not been revalidated by this documentation cleanup.
-
-## Legacy Files
-
-`repreGuard_detector.py`, `init_tiny_model.py`, `repe/`, and `saved_rep_reader.pt` belong to the V1 representation-reading detector path. The V2.0 RoBERTa service path does not require `saved_rep_reader.pt`.
+详细配置、Router 协议和验收命令见 [运行说明](docs/operations.md)。历史真实模型验收及运行限制见 [验收记录](docs/archive/evidence-runtime-acceptance-2026-09-07.md)。本地验收与生产部署分别记录。
