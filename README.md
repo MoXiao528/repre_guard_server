@@ -57,7 +57,7 @@ python run_roberta_server.py
 
 ## 接口
 
-所有接口都需要请求头：
+下列三个服务接口都需要请求头：
 
 ```text
 X-RepreGuard-Token: <服务令牌>
