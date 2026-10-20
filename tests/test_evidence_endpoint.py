@@ -35,6 +35,8 @@ def prediction(status="predicted", reason=None):
 
 
 class EvidenceEndpointTestCase(unittest.IsolatedAsyncioTestCase):
+    invalid_body_code = "INVALID_EVIDENCE_REQUEST"
+
     def setUp(self):
         self.calls = []
         self.payload = prediction()
@@ -68,7 +70,15 @@ class EvidenceEndpointTestCase(unittest.IsolatedAsyncioTestCase):
         self.app.exception_handlers.update(server.app.exception_handlers)
         self.app.add_middleware(DetectorIngressMiddleware, service_token=TOKEN)
 
-    async def invoke(self, payload=None, *, body=None, path=None, token=TOKEN):
+    async def invoke(
+        self,
+        payload=None,
+        *,
+        body=None,
+        path=None,
+        token=TOKEN,
+        content_type=b"application/json",
+    ):
         if path is None:
             path = "/evidence/route"
         if body is None:
@@ -95,7 +105,11 @@ class EvidenceEndpointTestCase(unittest.IsolatedAsyncioTestCase):
                 "query_string": b"",
                 "root_path": "",
                 "headers": [
-                    (b"content-type", b"application/json"),
+                    *(
+                        [(b"content-type", content_type)]
+                        if content_type is not None
+                        else []
+                    ),
                     (b"content-length", str(len(body)).encode()),
                     (b"x-repreguard-token", token.encode()),
                 ],
@@ -186,6 +200,32 @@ class EvidenceEndpointTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(code, 401)
         code, _ = await self.invoke({"text": "private", "extra": "x" * 131072})
         self.assertEqual(code, 413)
+        self.assertEqual(self.calls, [])
+
+    async def test_invalid_body_shapes_and_content_types_never_echo_input(self):
+        private_body = b'{"action":"evidence","text":"private raw text"}'
+        with patch.object(server, "detect_text") as main:
+            for body, content_type in (
+                (b"[" + private_body + b"]", b"application/json"),
+                (b'"private raw text"', b"application/json"),
+                (b'{"text":"private raw text",', b"application/json"),
+                (b"[" + private_body + b"]", None),
+                (b"private raw text", None),
+                (private_body, b"text/plain"),
+                (private_body, b"application/x-www-form-urlencoded"),
+                (
+                    b"action=evidence&text=private+raw+text",
+                    b"application/x-www-form-urlencoded",
+                ),
+            ):
+                with self.subTest(content_type=content_type, body=body[:20]):
+                    code, value = await self.invoke(
+                        body=body, content_type=content_type
+                    )
+                    self.assertEqual(code, 422)
+                    self.assertEqual(value["detail"]["code"], self.invalid_body_code)
+                    self.assertNotIn("private", json.dumps(value))
+            main.assert_not_called()
         self.assertEqual(self.calls, [])
 
     async def test_unsupported_and_failures_have_null_route_and_cached_sha(self):
@@ -377,12 +417,24 @@ class EvidenceEndpointTestCase(unittest.IsolatedAsyncioTestCase):
 
 
 class EvidenceActionEndpointTestCase(EvidenceEndpointTestCase):
-    async def invoke(self, payload=None, *, body=None, path=None, token=TOKEN):
+    invalid_body_code = "INVALID_DETECT_REQUEST"
+
+    async def invoke(
+        self,
+        payload=None,
+        *,
+        body=None,
+        path=None,
+        token=TOKEN,
+        content_type=b"application/json",
+    ):
         if path is None:
             path = "/detect"
             if isinstance(payload, dict):
                 payload = {"action": "evidence", **payload}
-        return await super().invoke(payload, body=body, path=path, token=token)
+        return await super().invoke(
+            payload, body=body, path=path, token=token, content_type=content_type
+        )
 
     async def test_request_validation_and_auth_do_not_expose_input_or_run_model(self):
         with patch.object(server, "detect_text") as main:

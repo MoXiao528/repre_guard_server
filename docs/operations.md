@@ -71,6 +71,8 @@ tokenizer_config.json
 
 Evidence 分支保持严格字符串和非空白校验，拒绝 `text/action` 之外的字段；其他 action 为 422。其并发、超时、失败降级和模型 SHA 语义与 `/evidence/route` 相同。原 `/evidence/route` 仍仅接受 `{"text":"完整原文"}`，保留旧客户端兼容。
 
+`/detect` 上所有请求模型校验错误均脱敏为固定 422 对象：可识别的 Evidence 请求仍为 `INVALID_EVIDENCE_REQUEST`，其余为 `INVALID_DETECT_REQUEST`。不回显输入明细，包括顶层数组/标量、无效 action、JSON 解码错误或因 Content-Type 缺失/错误而收到的原始字节；不能要求请求先正确解析成对象才能执行脱敏。主检测成功、空白文本业务检查和模型错误响应保持原语义。
+
 PHP 可始终将同一外部地址转发到检测端 `/detect`，不必判断 action；但必须完整转发 JSON 请求、`X-RepreGuard-Token`、JSON 响应和上游 HTTP 状态码。后端的 Evidence 请求发送整篇原文一次，不为每个主检测分段追加 Router 推理。
 
 先部署本版本检测端，再部署新后端；新后端遇到旧检测端或丢失 action 的转发器，可能收到普通主检测结果，应将其视为无效 Evidence 响应并仅降级 Evidence。验收必须通过实际 PHP 入口确认 `action=evidence` 得到 `status=routed`、完整响应和匹配 SHA，不能仅检查 HTTP 200。

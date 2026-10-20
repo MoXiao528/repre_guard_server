@@ -265,17 +265,20 @@ async def drain_inference() -> None:
 
 @app.exception_handler(RequestValidationError)
 async def validation_error(request: Request, exc: RequestValidationError):
-    if request.url.path == "/evidence/route" or (
-        request.url.path == "/detect"
-        and isinstance(exc.body, dict)
-        and exc.body.get("action") == "evidence"
-    ):
+    if request.url.path in {"/detect", "/evidence/route"}:
+        evidence = request.url.path == "/evidence/route" or (
+            isinstance(exc.body, dict) and exc.body.get("action") == "evidence"
+        )
         return JSONResponse(
             status_code=422,
             content={
                 "detail": {
-                    "code": "INVALID_EVIDENCE_REQUEST",
-                    "message": "Invalid Evidence request.",
+                    "code": "INVALID_EVIDENCE_REQUEST"
+                    if evidence
+                    else "INVALID_DETECT_REQUEST",
+                    "message": "Invalid Evidence request."
+                    if evidence
+                    else "Invalid detect request.",
                 }
             },
             headers={"Cache-Control": "no-store"},
