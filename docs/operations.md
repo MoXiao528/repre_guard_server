@@ -60,6 +60,21 @@ tokenizer_config.json
 
 主检测接口先完整计数再推理，不会静默截断过长输入。Evidence 请求校验失败返回固定 `422 INVALID_EVIDENCE_REQUEST`，不回显原文；其模型截断策略见下文。
 
+## 同入口 action 分流与 PHP 转发
+
+`POST /detect` 接受下列请求；两种分支均复用现有服务令牌与 128 KiB 请求体限制：
+
+| JSON | 执行与响应 |
+|---|---|
+| `{"text":"文本"}` 或 `{"text":"文本","action":"detect"}` | 主模型分数、阈值和标签 |
+| `{"text":"完整原文","action":"evidence"}` | Evidence Router 五字段响应，不进入主模型队列 |
+
+Evidence 分支保持严格字符串和非空白校验，拒绝 `text/action` 之外的字段；其他 action 为 422。其并发、超时、失败降级和模型 SHA 语义与 `/evidence/route` 相同。原 `/evidence/route` 仍仅接受 `{"text":"完整原文"}`，保留旧客户端兼容。
+
+PHP 可始终将同一外部地址转发到检测端 `/detect`，不必判断 action；但必须完整转发 JSON 请求、`X-RepreGuard-Token`、JSON 响应和上游 HTTP 状态码。后端的 Evidence 请求发送整篇原文一次，不为每个主检测分段追加 Router 推理。
+
+先部署本版本检测端，再部署新后端；新后端遇到旧检测端或丢失 action 的转发器，可能收到普通主检测结果，应将其视为无效 Evidence 响应并仅降级 Evidence。验收必须通过实际 PHP 入口确认 `action=evidence` 得到 `status=routed`、完整响应和匹配 SHA，不能仅检查 HTTP 200。
+
 ## 主检测排队与调参
 
 默认同时执行一次主检测推理，最多三个等待请求；CPU 回退时同样受此限制。准入容量已满时立即返回 `503 DETECT_QUEUE_FULL`；等待超过 15 秒返回 `503 DETECT_QUEUE_TIMEOUT`。两者均包含整数 `Retry-After`，默认 5 秒。等待中的客户端断开后移出队列，不执行推理。
