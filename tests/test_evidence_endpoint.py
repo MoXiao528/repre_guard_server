@@ -35,6 +35,8 @@ def prediction(status="predicted", reason=None):
 
 
 class EvidenceEndpointTestCase(unittest.IsolatedAsyncioTestCase):
+    invalid_body_code = "INVALID_EVIDENCE_REQUEST"
+
     def setUp(self):
         self.calls = []
         self.payload = prediction()
@@ -69,8 +71,16 @@ class EvidenceEndpointTestCase(unittest.IsolatedAsyncioTestCase):
         self.app.add_middleware(DetectorIngressMiddleware, service_token=TOKEN)
 
     async def invoke(
-        self, payload=None, *, body=None, path="/evidence/route", token=TOKEN
+        self,
+        payload=None,
+        *,
+        body=None,
+        path=None,
+        token=TOKEN,
+        content_type=b"application/json",
     ):
+        if path is None:
+            path = "/evidence/route"
         if body is None:
             body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         source = asyncio.Queue()
@@ -95,7 +105,11 @@ class EvidenceEndpointTestCase(unittest.IsolatedAsyncioTestCase):
                 "query_string": b"",
                 "root_path": "",
                 "headers": [
-                    (b"content-type", b"application/json"),
+                    *(
+                        [(b"content-type", content_type)]
+                        if content_type is not None
+                        else []
+                    ),
                     (b"content-length", str(len(body)).encode()),
                     (b"x-repreguard-token", token.encode()),
                 ],
@@ -129,6 +143,40 @@ class EvidenceEndpointTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(code, 200)
         self.assertEqual(len(self.calls[-1]), 20000)
 
+    async def test_default_and_explicit_detect_keep_main_contract(self):
+        result = DetectResult(
+            text="main",
+            score=0.1,
+            threshold=0.2,
+            label="HUMAN",
+            model="main",
+            score_type="probability",
+        )
+        for action in ({}, {"action": "detect"}):
+            with (
+                self.subTest(action=action),
+                patch.object(server, "detect_text", return_value=result) as main,
+            ):
+                code, value = await self.invoke(
+                    {"text": "  main  ", **action}, path="/detect"
+                )
+                self.assertEqual(code, 200)
+                self.assertEqual(value["model_name"], "main")
+                self.assertEqual(value["label"], "HUMAN")
+                main.assert_called_once_with("main")
+                self.assertEqual(self.calls, [])
+
+    async def test_unknown_or_wrong_type_action_never_runs_either_model(self):
+        with patch.object(server, "detect_text") as main:
+            for action in ("unknown", None, 1, True, [], {}):
+                with self.subTest(action=action):
+                    code, _ = await self.invoke(
+                        {"text": "private", "action": action}, path="/detect"
+                    )
+                    self.assertEqual(code, 422)
+            main.assert_not_called()
+        self.assertEqual(self.calls, [])
+
     async def test_request_validation_and_auth_do_not_expose_input_or_run_model(self):
         for payload in (
             {},
@@ -152,6 +200,32 @@ class EvidenceEndpointTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(code, 401)
         code, _ = await self.invoke({"text": "private", "extra": "x" * 131072})
         self.assertEqual(code, 413)
+        self.assertEqual(self.calls, [])
+
+    async def test_invalid_body_shapes_and_content_types_never_echo_input(self):
+        private_body = b'{"action":"evidence","text":"private raw text"}'
+        with patch.object(server, "detect_text") as main:
+            for body, content_type in (
+                (b"[" + private_body + b"]", b"application/json"),
+                (b'"private raw text"', b"application/json"),
+                (b'{"text":"private raw text",', b"application/json"),
+                (b"[" + private_body + b"]", None),
+                (b"private raw text", None),
+                (private_body, b"text/plain"),
+                (private_body, b"application/x-www-form-urlencoded"),
+                (
+                    b"action=evidence&text=private+raw+text",
+                    b"application/x-www-form-urlencoded",
+                ),
+            ):
+                with self.subTest(content_type=content_type, body=body[:20]):
+                    code, value = await self.invoke(
+                        body=body, content_type=content_type
+                    )
+                    self.assertEqual(code, 422)
+                    self.assertEqual(value["detail"]["code"], self.invalid_body_code)
+                    self.assertNotIn("private", json.dumps(value))
+            main.assert_not_called()
         self.assertEqual(self.calls, [])
 
     async def test_unsupported_and_failures_have_null_route_and_cached_sha(self):
@@ -340,6 +414,65 @@ class EvidenceEndpointTestCase(unittest.IsolatedAsyncioTestCase):
                 artifact_sha256=config.evidence_artifact_sha256,
             )
             self.assertEqual(server.EVIDENCE_TIMEOUT_SECONDS, 2.5)
+
+
+class EvidenceActionEndpointTestCase(EvidenceEndpointTestCase):
+    invalid_body_code = "INVALID_DETECT_REQUEST"
+
+    async def invoke(
+        self,
+        payload=None,
+        *,
+        body=None,
+        path=None,
+        token=TOKEN,
+        content_type=b"application/json",
+    ):
+        if path is None:
+            path = "/detect"
+            if isinstance(payload, dict):
+                payload = {"action": "evidence", **payload}
+        return await super().invoke(
+            payload, body=body, path=path, token=token, content_type=content_type
+        )
+
+    async def test_request_validation_and_auth_do_not_expose_input_or_run_model(self):
+        with patch.object(server, "detect_text") as main:
+            for payload in (
+                {},
+                {"text": ""},
+                {"text": " \n"},
+                {"text": 12},
+                {"text": None},
+                {"text": ["private"]},
+                {"text": "x" * 20001},
+                {"text": "private", "score": 0.9},
+            ):
+                with self.subTest(payload_type=type(payload.get("text")).__name__):
+                    code, value = await self.invoke(payload)
+                    self.assertEqual(code, 422)
+                    self.assertEqual(
+                        value["detail"]["code"], "INVALID_EVIDENCE_REQUEST"
+                    )
+                    self.assertNotIn("private", json.dumps(value))
+            code, _ = await self.invoke({"text": "private"}, token="wrong")
+            self.assertEqual(code, 401)
+            code, _ = await self.invoke({"text": "private", "extra": "x" * 131072})
+            self.assertEqual(code, 413)
+            main.assert_not_called()
+        self.assertEqual(self.calls, [])
+
+    async def test_evidence_action_never_runs_main_model_or_uses_main_capacity(self):
+        with (
+            patch.object(server, "detect_text") as main,
+            patch.object(self.main_admission, "run") as admission,
+        ):
+            code, value = await self.invoke({"text": "  original\r\ntext  "})
+            self.assertEqual(code, 200)
+            self.assertEqual(value["status"], "routed")
+            self.assertEqual(self.calls, ["  original\r\ntext  "])
+            main.assert_not_called()
+            admission.assert_not_called()
 
 
 if __name__ == "__main__":

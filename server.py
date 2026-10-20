@@ -22,6 +22,7 @@ from repreGuard_service import (
 
 class DetectRequest(BaseModel):
     text: str = Field(min_length=1, max_length=20000)
+    action: Literal["detect"] = "detect"
 
 
 class DetectResponse(BaseModel):
@@ -42,6 +43,10 @@ class EvidenceRequest(BaseModel):
         if not text.strip():
             raise ValueError("Text cannot be blank.")
         return text
+
+
+class EvidenceActionRequest(EvidenceRequest):
+    action: Literal["evidence"]
 
 
 class EvidenceConfidence(BaseModel):
@@ -260,13 +265,20 @@ async def drain_inference() -> None:
 
 @app.exception_handler(RequestValidationError)
 async def validation_error(request: Request, exc: RequestValidationError):
-    if request.url.path == "/evidence/route":
+    if request.url.path in {"/detect", "/evidence/route"}:
+        evidence = request.url.path == "/evidence/route" or (
+            isinstance(exc.body, dict) and exc.body.get("action") == "evidence"
+        )
         return JSONResponse(
             status_code=422,
             content={
                 "detail": {
-                    "code": "INVALID_EVIDENCE_REQUEST",
-                    "message": "Invalid Evidence request.",
+                    "code": "INVALID_EVIDENCE_REQUEST"
+                    if evidence
+                    else "INVALID_DETECT_REQUEST",
+                    "message": "Invalid Evidence request."
+                    if evidence
+                    else "Invalid detect request.",
                 }
             },
             headers={"Cache-Control": "no-store"},
@@ -333,8 +345,13 @@ def health_check() -> dict:
     return {"status": "ok"}
 
 
-@app.post("/detect", response_model=DetectResponse)
-async def detect(request: Request, req: DetectRequest) -> DetectResponse:
+@app.post("/detect", response_model=DetectResponse | EvidenceResponse)
+async def detect(
+    request: Request, req: DetectRequest | EvidenceActionRequest
+) -> DetectResponse | EvidenceResponse:
+    if isinstance(req, EvidenceActionRequest):
+        return await route_evidence(request, req)
+
     text = str(req.text or "").strip()
     if not text:
         raise HTTPException(

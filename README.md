@@ -66,7 +66,7 @@ X-RepreGuard-Token: <服务令牌>
 | 方法 | 路径 | 用途 |
 | --- | --- | --- |
 | GET | `/health` | 健康检查 |
-| POST | `/detect` | AI/Human 检测 |
+| POST | `/detect` | 默认 AI/Human 检测，`action=evidence` 时执行 Evidence 路由 |
 | POST | `/evidence/route` | Evidence 语言、领域路由 |
 
 ### 文本检测
@@ -102,6 +102,18 @@ X-RepreGuard-Token: <服务令牌>
 Evidence 默认关闭，通过 `.env` 中的 `REPRE_GUARD_EVIDENCE_*` 配置启用，需要单独提供 Router 模型目录和产物 SHA-256。
 
 Router 在 CPU 上判断整篇文本的语言和领域，供后端选择写作特点参考统计。它不生成 AI 分数，不修改主检测结果。
+
+后端通过同一个 `/detect` 入口发送：
+
+```json
+{"text":"需要分析的完整原文。","action":"evidence"}
+```
+
+未提供 `action` 或显式设置为 `"detect"` 时执行主检测；设置为 `"evidence"` 时直接复用 Evidence 处理，不执行主检测。其他值返回 422。Evidence 输入仍严格校验，除 `text` 和 `action` 外不接受额外字段；失败响应不回显原文。
+
+`/detect` 的请求校验错误均返回固定错误对象，不包含 Pydantic 的输入明细。已识别的 Evidence 请求使用 `INVALID_EVIDENCE_REQUEST`；其他无效形状、action 或 Content-Type 使用 `INVALID_DETECT_REQUEST`，避免数组、原始字节等未解析请求回显正文。正常主检测和模型业务错误的响应保持原协议。
+
+此协议同时支持直连和固定转发 `/detect` 的 PHP 入口。PHP 无需新增分流规则，但必须保留完整 JSON 请求、`X-RepreGuard-Token`、上游响应和 HTTP 状态码。原 `/evidence/route` 继续接受仅含 `text` 的请求，兼容旧后端。部署时先更新检测端，再更新后端；线上 PHP 透传需单独实测。
 
 该接口的业务结果使用 HTTP `200`，调用方必须检查 `status` 和 `reason`；未启用或加载失败时返回 `failed/model_unavailable`。鉴权和输入错误使用非 2xx 状态。
 
