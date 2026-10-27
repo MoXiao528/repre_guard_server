@@ -256,6 +256,34 @@ class IngressTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.status(sent), 204)
         self.assertEqual(downstream.bodies, [body])
 
+    async def test_full_length_envelope_body_remains_within_original_limit(self) -> None:
+        for original in ("测" * 20000, "😀" * 20000, "\x01" * 20000):
+            body = json.dumps(
+                {"text": "AIDT:1:evidence\n" + original}, ensure_ascii=False
+            ).encode("utf-8")
+            with self.subTest(body_size=len(body)):
+                self.assertLessEqual(len(body), DETECT_BODY_LIMIT_BYTES)
+                downstream, sent, _ = await self.invoke(
+                    path="/detect", headers=[TOKEN_HEADER], chunks=[body]
+                )
+                self.assertEqual(self.status(sent), 204)
+                self.assertEqual(downstream.bodies, [body])
+
+    async def test_envelope_cannot_bypass_stream_limit_or_token_check(self) -> None:
+        body = b'{"text":"AIDT:1:evidence\\n' + b"x" * DETECT_BODY_LIMIT_BYTES
+        downstream, sent, reads = await self.invoke(
+            path="/detect", chunks=[body]
+        )
+        self.assertEqual(self.status(sent), 401)
+        self.assertEqual(reads, 0)
+        self.assertEqual(downstream.calls, 0)
+        downstream, sent, _ = await self.invoke(
+            path="/detect", headers=[TOKEN_HEADER, (b"content-length", b"1")],
+            chunks=[body[:65536], body[65536:]],
+        )
+        self.assertEqual(self.status(sent), 413)
+        self.assertEqual(downstream.calls, 0)
+
     async def test_unrelated_paths_are_not_claimed_by_internal_protocol(self) -> None:
         downstream, sent, receive_calls = await self.invoke(path="/openapi.json")
 

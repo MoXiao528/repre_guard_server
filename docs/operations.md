@@ -77,6 +77,20 @@ PHP 可始终将同一外部地址转发到检测端 `/detect`，不必判断 ac
 
 先部署本版本检测端，再部署新后端；新后端遇到旧检测端或丢失 action 的转发器，可能收到普通主检测结果，应将其视为无效 Evidence 响应并仅降级 Evidence。验收必须通过实际 PHP 入口确认 `action=evidence` 得到 `status=routed`、完整响应和匹配 SHA，不能仅检查 HTTP 200。
 
+## text 封装兼容
+
+演示分支 `/detect` 接受 `{"text":"AIDT:1:detect\n原文"}` 或 `{"text":"AIDT:1:evidence\n完整原文"}`。外层 JSON 解析后，以第一个 LF 分隔头部和正文；只接受上述两个精确头部，不接受 CRLF 头、未知版本、其他 action、额外字段或外层 action。错误复用固定脱敏 422，不回显正文、路径或底层异常。
+
+现有 ingress 先验证 `X-RepreGuard-Token` 和实际流式 128 KiB 限额，再由请求模型的前置校验器单层解包，最后执行原文 1～20,000 字符、类型、非空白与 action 校验。封装增加的头部不占原文字数；不得仅在 handler 内解包，也不提高 `text` 的原文上限或入口体积限制。
+
+传输层不 trim、不转 Base64、不做内层 JSON 解析，也不递归解包。正文即使是完整封装或普通 JSON，解包一次后都只作为数据。原有主检测 trim、token 限制与 Router 模型规范化保持原样；主模型/Router 分流、响应、SHA、准入及超时不变。
+
+`AIDT:` 为保留命名空间。旧协议直接发送此前缀正文可能被解析或拒绝；通过后端开启封装可把这种正文再包一层，单次解包后安全作为原文。普通旧 `text/action` 和 `/evidence/route` 不变，后者不解释封装头。新协议没有 HMAC，不能发现所有仍合法的正文截短或改写。
+
+只需后端开关 `DETECT_TEXT_ENVELOPE_ENABLED=true`，检测端不新增环境变量。先部署并重启兼容检测端，再启用后端。PHP 可以仅保留 `text`，但仍须完整保留该字符串、Token、响应字段及状态码；若 PHP 裁剪正文/响应或重编码后超过 128 KiB，本协议不能绕过这些限制。真实 PHP 必须同时验证 probability 主响应、Evidence 五字段及匹配 SHA，HTTP 200 不是验收依据。
+
+回退先关闭后端封装并重建 API；PHP 未修好时 Evidence 同时保持 off。检测端兼容版本可保留；若也回 main，停止原服务进程、切换干净分支并使用原启动方式重启，便携入口为 `python run_roberta_server.py`。切分支不会自动恢复 `.env`、Compose 或镜像。后端回 main 前必须删除新增 dotenv 键并移除环境覆盖，否则旧 Settings 可能拒绝启动；完整命令见后端检测合同的 text 封装章节。
+
 ## 主检测排队与调参
 
 默认同时执行一次主检测推理，最多三个等待请求；CPU 回退时同样受此限制。准入容量已满时立即返回 `503 DETECT_QUEUE_FULL`；等待超过 15 秒返回 `503 DETECT_QUEUE_TIMEOUT`。两者均包含整数 `Retry-After`，默认 5 秒。等待中的客户端断开后移出队列，不执行推理。

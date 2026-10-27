@@ -115,6 +115,8 @@ Router 在 CPU 上判断整篇文本的语言和领域，供后端选择写作�
 
 此协议同时支持直连和固定转发 `/detect` 的 PHP 入口。PHP 无需新增分流规则，但必须保留完整 JSON 请求、`X-RepreGuard-Token`、上游响应和 HTTP 状态码。原 `/evidence/route` 继续接受仅含 `text` 的请求，兼容旧后端。部署时先更新检测端，再更新后端；线上 PHP 透传需单独实测。
 
+`demo/text-envelope` 另支持 `{"text":"AIDT:1:evidence\n完整原文"}` 和 `{"text":"AIDT:1:detect\n原文"}`，用于只保留 `text` 的转发器。无 Base64/HMAC，仍需 Token；单层解包后复用原校验和分流，128 KiB 请求上限不变。`AIDT:` 为保留前缀，旧协议裸发此前缀正文存在歧义。后端默认不开启，配置、兼容例外与部署恢复见 [运行说明](docs/operations.md#text-封装兼容)。
+
 该接口的业务结果使用 HTTP `200`，调用方必须检查 `status` 和 `reason`；未启用或加载失败时返回 `failed/model_unavailable`。鉴权和输入错误使用非 2xx 状态。
 
 ## 测试

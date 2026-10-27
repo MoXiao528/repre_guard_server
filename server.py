@@ -1,13 +1,13 @@
 import asyncio
 import math
 from collections.abc import Callable
-from typing import Literal
+from typing import Annotated, Literal
 
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, field_validator
 
 from config import settings
 from evidence_router import EvidenceRouter
@@ -18,6 +18,7 @@ from repreGuard_service import (
     detect_text,
     get_detector,
 )
+from text_envelope import unwrap_text_envelope
 
 
 class DetectRequest(BaseModel):
@@ -347,7 +348,10 @@ def health_check() -> dict:
 
 @app.post("/detect", response_model=DetectResponse | EvidenceResponse)
 async def detect(
-    request: Request, req: DetectRequest | EvidenceActionRequest
+    request: Request,
+    req: Annotated[
+        DetectRequest | EvidenceActionRequest, BeforeValidator(unwrap_text_envelope)
+    ],
 ) -> DetectResponse | EvidenceResponse:
     if isinstance(req, EvidenceActionRequest):
         return await route_evidence(request, req)

@@ -474,6 +474,113 @@ class EvidenceActionEndpointTestCase(EvidenceEndpointTestCase):
             main.assert_not_called()
             admission.assert_not_called()
 
+    async def test_enveloped_evidence_restores_fulltext_once_before_length_validation(self):
+        originals = (
+            '  中文😀\r\n"引号"\t\n  ',
+            '{"action":"detect","text":"普通 JSON 正文"}',
+            "AIDT:1:detect\n这一层是正文",
+            "AIDT:99:unknown\n这一层也只是正文",
+            "测" * 20000,
+        )
+        with (
+            patch.object(server, "detect_text") as main,
+            patch.object(self.main_admission, "run") as admission,
+        ):
+            for original in originals:
+                with self.subTest(length=len(original)):
+                    self.calls.clear()
+                    code, value = await self.invoke(
+                        {"text": "AIDT:1:evidence\n" + original}, path="/detect"
+                    )
+                    self.assertEqual(code, 200)
+                    self.assertEqual(
+                        value, {"schemaVersion": 1, **prediction(), "status": "routed"}
+                    )
+                    self.assertEqual(self.calls, [original])
+            main.assert_not_called()
+            admission.assert_not_called()
+
+    async def test_enveloped_detect_preserves_main_contract_and_existing_trim(self):
+        result = DetectResult(
+            text="main", score=0.1, threshold=0.2, label="HUMAN", model="main",
+            score_type="probability",
+        )
+        originals = (
+            '  中文\r\n"引号"\t  ',
+            '{"action":"evidence","text":"ordinary JSON"}',
+            "AIDT:1:evidence\nprivate original",
+            "测" * 20000,
+        )
+        for original in originals:
+            with (
+                self.subTest(length=len(original)),
+                patch.object(server, "detect_text", return_value=result) as main,
+            ):
+                code, value = await self.invoke(
+                    {"text": "AIDT:1:detect\n" + original}, path="/detect"
+                )
+                self.assertEqual(code, 200)
+                self.assertEqual(value, {
+                    "score": 0.1, "threshold": 0.2, "label": "HUMAN",
+                    "model_name": "main", "score_type": "probability",
+                })
+                main.assert_called_once_with(original.strip())
+        self.assertEqual(self.calls, [])
+
+    async def test_bad_envelopes_and_invalid_originals_are_private_and_run_no_model(self):
+        payloads = [
+            {"text": "AIDT:"},
+            {"text": "AIDT:1:evidence"},
+            {"text": "AIDT:2:evidence\nprivate"},
+            {"text": "AIDT:1:unknown\nprivate"},
+            {"text": "AIDT:1:evidence\r\nprivate"},
+            {"text": "AIDT:1:evidence\nprivate", "action": "detect"},
+            {"text": "AIDT:1:evidence\nprivate", "action": None},
+            {"text": "AIDT:1:evidence\nprivate", "action": ""},
+            {"text": "AIDT:1:evidence\nprivate", "extra": "private"},
+        ]
+        payloads.extend(
+            {"text": f"AIDT:1:{action}\n{original}"}
+            for action in ("detect", "evidence")
+            for original in ("", " \r\n\t", "x" * 20001)
+        )
+        with patch.object(server, "detect_text") as main:
+            for payload in payloads:
+                with self.subTest(length=len(payload["text"])):
+                    code, value = await self.invoke(payload, path="/detect")
+                    self.assertEqual(code, 422)
+                    self.assertNotIn("private", json.dumps(value))
+                    self.assertNotIn("AIDT:", json.dumps(value))
+            main.assert_not_called()
+        self.assertEqual(self.calls, [])
+
+    async def test_envelope_encoding_json_and_auth_failures_are_private(self):
+        cases = (
+            (b'{"text":"AIDT:1:evidence\\nprivate\\ud800"}', 422),
+            (b'{"text":"AIDT:1:evidence\\nprivate\xff"}', 400),
+            (b'{"text":"AIDT:1:evidence\\nprivate",', 422),
+        )
+        with patch.object(server, "detect_text") as main:
+            for body, expected in cases:
+                with self.subTest(expected=expected):
+                    code, value = await self.invoke(body=body, path="/detect")
+                    self.assertEqual(code, expected)
+                    self.assertNotIn("private", json.dumps(value))
+                    self.assertNotIn("AIDT:", json.dumps(value))
+            code, _ = await self.invoke(
+                {"text": "AIDT:bad\nprivate"}, path="/detect", token="wrong"
+            )
+            self.assertEqual(code, 401)
+            main.assert_not_called()
+        self.assertEqual(self.calls, [])
+
+    async def test_old_evidence_route_does_not_interpret_envelope_prefix(self):
+        original = "AIDT:1:detect\n原接口的普通正文"
+        code, value = await self.invoke({"text": original}, path="/evidence/route")
+        self.assertEqual(code, 200)
+        self.assertEqual(value["status"], "routed")
+        self.assertEqual(self.calls, [original])
+
 
 if __name__ == "__main__":
     unittest.main()
