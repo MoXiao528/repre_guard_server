@@ -1,85 +1,102 @@
 # RepreGuard
 
-AIDetector 的文本检测服务，基于 FastAPI 提供 AI/Human 检测和可选的 Evidence 路由。
+RepreGuard 是 AIDetector 的内部文本推理服务。主检测使用 `DetectRL-X-XLM-RoBERTa-Detector-All`，返回 AI 类别概率 `score`、判定阈值 `threshold` 和 `AI` / `HUMAN` 标签。默认阈值为 `0.0028`，分数达到阈值即返回 `AI`。模型版本锁定在 [`config.py`](config.py)，模型文件见 [Hugging Face](https://huggingface.co/WUJUNCHAO/DetectRL-X-XLM-RoBERTa-Detector-All)。
 
-```text
-AIDetector-web → AIDetector-Back → RepreGuard
-```
-
-本服务负责模型推理；用户、配额和检测历史由后端管理。
-
-## 模型
-
-主检测使用 [DetectRL-X XLM-RoBERTa Detector](https://huggingface.co/WUJUNCHAO/DetectRL-X-XLM-RoBERTa-Detector-All)，模型版本由 `config.py` 固定。
-
-`score` 是模型对 AI 类别 `LABEL_1` 的概率输出。默认阈值为 `0.0028`：达到阈值返回 `AI`，否则返回 `HUMAN`。
-
-支持 CUDA 和 CPU，默认优先使用 CUDA。
+可选的 Evidence Router 判断整篇文本的语言和领域，供后端选择写作特点的参考统计。用户认证、配额和检测历史由后端管理。关联仓库见 [AIDetector-web](https://github.com/MoXiao528/AIDetector-web) 和 [AIDetector-Back](https://github.com/MoXiao528/AIDetector-Back)。
 
 ## 快速开始
 
-需要 Python 3.10 或以上版本。以下命令均在仓库根目录执行。
+以下使用 Python 3.11。首次下载模型需要访问 Hugging Face，也可提前准备同版本的本地模型目录。获取代码后，以下命令均在仓库根目录执行。
 
-### 1. 安装依赖
+```bash
+git clone https://github.com/MoXiao528/repre_guard_server.git
+cd repre_guard_server
+```
+
+### 1. 创建环境并安装依赖
+
+Linux（Bash）
+
+```bash
+python3.11 -m venv .venv
+source .venv/bin/activate
+test -f .env || cp .env.example .env
+```
+
+Windows（PowerShell）
+
+```powershell
+python -m venv .venv
+. .\.venv\Scripts\Activate.ps1
+if (-not (Test-Path -LiteralPath .env)) { Copy-Item .env.example .env }
+```
+
+激活环境后安装依赖。
 
 ```bash
 python -m pip install -r requirements.txt
-python -c "from pathlib import Path; import shutil; shutil.copyfile('.env.example', '.env') if not Path('.env').exists() else None"
 ```
 
-### 2. 配置环境
+### 2. 配置令牌和模型路径
 
-编辑 `.env`：
+编辑从 [`.env.example`](.env.example) 复制的 `.env`。将令牌占位值替换为实际值。接入后端时，两端的 `REPRE_GUARD_SERVICE_TOKEN` 必须完全一致。
 
 ```dotenv
-REPRE_GUARD_SERVICE_TOKEN=<与后端一致的服务令牌>
+REPRE_GUARD_SERVICE_TOKEN=REPLACE_ME
 REPRE_GUARD_MODEL_PATH=./models/detector
 REPRE_GUARD_MODEL_CACHE_DIR=./models/cache
+REPRE_GUARD_HOST=127.0.0.1
+REPRE_GUARD_PORT=9000
 ```
 
-服务令牌至少包含 32 个无空白的可打印 ASCII 字符。`.env` 和模型文件不要提交到仓库。
+令牌至少 32 个无空白的可打印 ASCII 字符。首次部署可用 `python -c "import secrets; print(secrets.token_urlsafe(32))"` 生成令牌，保存到部署配置。`.venv`、真实令牌和本地模型留在本机。
 
-### 3. 下载模型
+### 3. 下载模型并启动
 
-以下命令下载配置中锁定的模型版本及必需文件：
+以下命令按当前配置下载指定版本的必需文件。已经预置模型的环境可直接启动。
 
 ```bash
-python -c "from huggingface_hub import snapshot_download; from config import REQUIRED_MODEL_FILES, settings; snapshot_download(repo_id=settings.model_name, revision=settings.model_revision, local_dir=settings.model_path, allow_patterns=list(REQUIRED_MODEL_FILES))"
-```
+python -c '
+from config import REQUIRED_MODEL_FILES, settings
+from huggingface_hub import snapshot_download
 
-### 4. 启动服务
+snapshot_download(
+    repo_id=settings.model_name,
+    revision=settings.model_revision,
+    local_dir=settings.model_path,
+    allow_patterns=list(REQUIRED_MODEL_FILES),
+)
+'
+```
 
 ```bash
 python run_roberta_server.py
 ```
 
-默认监听 `0.0.0.0:9000`，启动时自动加载并预热模型。服务采用单 worker，访问范围应由网络或防火墙限制。
+主模型加载并预热成功后，服务开始接收请求。按上面的配置，地址为 `http://127.0.0.1:9000`。
 
-## 接口
+### 4. 发送第一条请求
 
-下列三个服务接口都需要请求头：
+打开另一个终端，进入仓库根目录并激活同一虚拟环境。下面的命令从当前配置读取令牌并发送健康检查和文本检测请求。
 
-```text
-X-RepreGuard-Token: <服务令牌>
+Linux（Bash）
+
+```bash
+token="$(python -c 'from config import settings; print(settings.require_service_token())')"
+curl -fsS -H "X-RepreGuard-Token: $token" http://127.0.0.1:9000/health
+curl -fsS -H "X-RepreGuard-Token: $token" -H 'Content-Type: application/json' \
+  --data '{"text":"The museum opens at nine on weekdays."}' http://127.0.0.1:9000/detect
 ```
 
-| 方法 | 路径 | 用途 |
-| --- | --- | --- |
-| GET | `/health` | 健康检查 |
-| POST | `/detect` | 默认 AI/Human 检测，`action=evidence` 时执行 Evidence 路由 |
-| POST | `/evidence/route` | Evidence 语言、领域路由 |
+Windows（PowerShell）
 
-### 文本检测
-
-请求：
-
-```json
-{
-  "text": "需要检测的文本。"
-}
+```powershell
+$headers = @{ 'X-RepreGuard-Token' = (python -c 'from config import settings; print(settings.require_service_token())') }
+Invoke-RestMethod -Headers $headers -Uri 'http://127.0.0.1:9000/health'
+Invoke-RestMethod -Method Post -Headers $headers -Uri 'http://127.0.0.1:9000/detect' -ContentType 'application/json' -Body '{"text":"The museum opens at nine on weekdays."}'
 ```
 
-响应示例：
+健康检查返回 `{"status":"ok"}`。主检测返回以下结构，`score` 和 `label` 是示例值，以实际推理结果为准。
 
 ```json
 {
@@ -91,40 +108,35 @@ X-RepreGuard-Token: <服务令牌>
 }
 ```
 
-客户端应检查 `score_type`，不能将其他类型的分数当作概率使用。
+## 接口
 
-输入限制：请求体最多 128 KiB；文本为 1～20,000 个 Unicode 码点且不能全为空白；主检测最多 512 tokens，包含特殊 tokens。token 超限返回 `422 INPUT_TOO_LONG`，不会静默截断。
+以下接口均要求 `X-RepreGuard-Token`。POST 请求使用 `Content-Type: application/json`。
 
-默认同时执行一个主检测请求，最多三个请求等待，等待上限为 15 秒。队列满或等待超时返回 `503`。
+| 方法与路径 | 请求 | 结果 |
+| --- | --- | --- |
+| `GET /health` | 无 | `{"status":"ok"}` |
+| `POST /detect` | `{"text":"待测文本"}`，也可显式加 `"action":"detect"` | AI 类别概率、阈值和标签 |
+| `POST /detect` | `{"text":"完整原文","action":"evidence"}` | Evidence 语言与领域路由结果 |
+| `POST /evidence/route` | `{"text":"完整原文"}` | 兼容已有直连客户端的 Evidence 路由入口 |
 
-## Evidence 路由
+Evidence 请求需先启用并加载 Router，默认关闭。
 
-Evidence 默认关闭，通过 `.env` 中的 `REPRE_GUARD_EVIDENCE_*` 配置启用，需要单独提供 Router 模型目录和产物 SHA-256。
+POST 请求体最多 128 KiB（含 JSON 开销），`text` 为 1～20,000 个 Unicode 字符且不能全为空白。主检测默认最多 512 tokens（含特殊 tokens），超限返回 `422 INPUT_TOO_LONG`。
 
-Router 在 CPU 上判断整篇文本的语言和领域，供后端选择写作特点参考统计。它不生成 AI 分数，不修改主检测结果。
+## 部署
 
-后端通过同一个 `/detect` 入口发送：
+- 使用 `python run_roberta_server.py` 启动单 worker。代码默认绑定 `0.0.0.0:9000`。仅本机访问时可绑定 `127.0.0.1`。后端容器或其他主机访问时，用 `REPRE_GUARD_HOST` 和 `REPRE_GUARD_PORT` 选择其可达的地址和端口，并限制检测端口的访问范围。
+- Linux 上配置实际模型与缓存路径，建议用绝对路径。进程环境变量优先于 `.env`，相对路径以工作目录为准。离线迁移时保留下载生成的 `.cache/huggingface/download/*.metadata`，或提供版本清单。格式见 [主模型配置与校验](docs/operations.md#主检测配置与模型校验)。
+- 默认优先 CUDA，不可用时回退 CPU。要求 GPU 的环境应在启动前用 `python -c "import torch; assert torch.cuda.is_available()"` 检查运行环境。默认同时执行一次主检测，允许三个等待请求。
+- 直连时从后端实际网络验证 `/health` 和 `/detect`。PHP 固定转发到 `/detect` 时，还要从后端走实际 PHP 地址验证主检测响应，检查令牌、正文、响应字段和 HTTP 状态码。
 
-```json
-{"text":"需要分析的完整原文。","action":"evidence"}
-```
-
-未提供 `action` 或显式设置为 `"detect"` 时执行主检测；设置为 `"evidence"` 时直接复用 Evidence 处理，不执行主检测。其他值返回 422。Evidence 输入仍严格校验，除 `text` 和 `action` 外不接受额外字段；失败响应不回显原文。
-
-`/detect` 的请求校验错误均返回固定错误对象，不包含 Pydantic 的输入明细。已识别的 Evidence 请求使用 `INVALID_EVIDENCE_REQUEST`；其他无效形状、action 或 Content-Type 使用 `INVALID_DETECT_REQUEST`，避免数组、原始字节等未解析请求回显正文。正常主检测和模型业务错误的响应保持原协议。
-
-此协议同时支持直连和固定转发 `/detect` 的 PHP 入口。PHP 无需新增分流规则，但必须保留完整 JSON 请求、`X-RepreGuard-Token`、上游响应和 HTTP 状态码。原 `/evidence/route` 继续接受仅含 `text` 的请求，兼容旧后端。部署时先更新检测端，再更新后端；线上 PHP 透传需单独实测。
-
-`demo/text-envelope` 另支持 `{"text":"AIDT:1:evidence\n完整原文"}` 和 `{"text":"AIDT:1:detect\n原文"}`，用于只保留 `text` 的转发器。无 Base64/HMAC，仍需 Token；单层解包后复用原校验和分流，128 KiB 请求上限不变。`AIDT:` 为保留前缀，旧协议裸发此前缀正文存在歧义。后端默认不开启，配置、兼容例外与部署恢复见 [运行说明](docs/operations.md#text-封装兼容)。
-
-该接口的业务结果使用 HTTP `200`，调用方必须检查 `status` 和 `reason`；未启用或加载失败时返回 `failed/model_unavailable`。鉴权和输入错误使用非 2xx 状态。
 
 ## 测试
 
+在已安装运行依赖的虚拟环境中执行。
 ```bash
+python -m pip install httpx
 python -B -m unittest discover -s tests -v
 ```
 
-普通测试使用模拟或小型模型，不下载生产模型；部分依赖缺失时会跳过对应检查。
-
-详细配置、Router 协议和验收命令见 [运行说明](docs/operations.md)。历史真实模型验收及运行限制见 [验收记录](docs/archive/evidence-runtime-acceptance-2026-09-07.md)。本地验收与生产部署分别记录。
+单元测试使用模拟或小型模型。
