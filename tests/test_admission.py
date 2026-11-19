@@ -6,8 +6,9 @@ import time
 import unittest
 from unittest.mock import patch
 
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
 
+from ingress import DetectorIngressMiddleware
 import server
 from repreGuard_service import DetectResult, DetectServiceError
 
@@ -244,6 +245,12 @@ class AdmissionTestCase(unittest.IsolatedAsyncioTestCase):
 
     async def test_full_asgi_chain_removes_disconnected_pending_request(self) -> None:
         admission = server.InferenceAdmission(max_pending_requests=1, queue_timeout_seconds=1)
+        token = "admission-test-service-token-longer-than-32-characters"
+        # Keep the real ASGI chain independent of an untracked local .env.
+        app = FastAPI()
+        app.router.routes = server.app.router.routes
+        app.exception_handlers.update(server.app.exception_handlers)
+        app.add_middleware(DetectorIngressMiddleware, service_token=token)
         started = threading.Event()
         release = threading.Event()
         calls: list[str] = []
@@ -278,7 +285,7 @@ class AdmissionTestCase(unittest.IsolatedAsyncioTestCase):
             "headers": [
                 (b"content-type", b"application/json"),
                 (b"content-length", str(len(body)).encode("ascii")),
-                (b"x-repreguard-token", server.settings.service_token.encode("ascii")),
+                (b"x-repreguard-token", token.encode("ascii")),
             ],
             "client": ("127.0.0.1", 12345),
             "server": ("127.0.0.1", 9000),
@@ -290,7 +297,7 @@ class AdmissionTestCase(unittest.IsolatedAsyncioTestCase):
         ):
             active = asyncio.create_task(server.detect(FakeRequest(), server.DetectRequest(text="active")))
             await self.wait_until(started.is_set)
-            disconnected = asyncio.create_task(server.app(scope, receive, send))
+            disconnected = asyncio.create_task(app(scope, receive, send))
             await self.wait_until(lambda: admission.pending_count == 1)
             source.put_nowait({"type": "http.disconnect"})
             await disconnected
