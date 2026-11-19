@@ -79,7 +79,7 @@ PHP 可始终将同一外部地址转发到检测端 `/detect`，不必判断 ac
 
 ## text 封装兼容
 
-演示分支 `/detect` 接受 `{"text":"AIDT:1:detect\n原文"}` 或 `{"text":"AIDT:1:evidence\n完整原文"}`。外层 JSON 解析后，以第一个 LF 分隔头部和正文；只接受上述两个精确头部，不接受 CRLF 头、未知版本、其他 action、额外字段或外层 action。错误复用固定脱敏 422，不回显正文、路径或底层异常。
+`/detect` 接受 `{"text":"AIDT:1:detect\n原文"}` 或 `{"text":"AIDT:1:evidence\n完整原文"}`。外层 JSON 解析后，以第一个 LF 分隔头部和正文；只接受上述两个精确头部，不接受 CRLF 头、未知版本、其他 action、额外字段或外层 action。错误复用固定脱敏 422，不回显正文、路径或底层异常。
 
 现有 ingress 先验证 `X-RepreGuard-Token` 和实际流式 128 KiB 限额，再由请求模型的前置校验器单层解包，最后执行原文 1～20,000 字符、类型、非空白与 action 校验。封装增加的头部不占原文字数；不得仅在 handler 内解包，也不提高 `text` 的原文上限或入口体积限制。
 
@@ -89,7 +89,7 @@ PHP 可始终将同一外部地址转发到检测端 `/detect`，不必判断 ac
 
 只需后端开关 `DETECT_TEXT_ENVELOPE_ENABLED=true`，检测端不新增环境变量。先部署并重启兼容检测端，再启用后端。PHP 可以仅保留 `text`，但仍须完整保留该字符串、Token、响应字段及状态码；若 PHP 裁剪正文/响应或重编码后超过 128 KiB，本协议不能绕过这些限制。真实 PHP 必须同时验证 probability 主响应、Evidence 五字段及匹配 SHA，HTTP 200 不是验收依据。
 
-回退先关闭后端封装并重建 API；PHP 未修好时 Evidence 同时保持 off。检测端兼容版本可保留；若也回 main，停止原服务进程、切换干净分支并使用原启动方式重启，便携入口为 `python run_roberta_server.py`。切分支不会自动恢复 `.env`、Compose 或镜像。后端回 main 前必须删除新增 dotenv 键并移除环境覆盖，否则旧 Settings 可能拒绝启动；完整命令见后端检测合同的 text 封装章节。
+关闭封装前，先确认 PHP 能完整转发外层 `action`，否则 Evidence 请求会被当成主检测；PHP 尚未修好时应保留封装。检测端兼容版本可以继续使用。若需回退到引入封装之前的已验证版本，先停止原服务进程，再切到对应版本并使用原启动方式重启，便携入口为 `python run_roberta_server.py`。切换代码不会自动恢复 `.env`、Compose 或镜像；`main` 合入封装后也不再代表兼容前版本。后端若同时回退到不识别 `DETECT_TEXT_ENVELOPE_ENABLED` 的旧版本，必须删除该 dotenv 键并移除环境覆盖，否则旧 Settings 可能拒绝启动；配置核对见后端检测合同的 text 封装章节。
 
 ## 主检测排队与调参
 
